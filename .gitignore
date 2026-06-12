@@ -18,3 +18,5 @@ windows/
 # Secrets — JAMAIS de clés API dans le dépôt (exigence AO)
 *.env
 **/secrets.*
+
+.jolli/
