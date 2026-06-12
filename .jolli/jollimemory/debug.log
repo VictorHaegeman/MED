@@ -20,3 +20,27 @@
 [2026-06-12T09:55:49.160Z] INFO  [SessionStartHook] No briefing generated (skipped or timed out)
 [2026-06-12T09:55:52.768Z] INFO  [SessionStartHook] SessionStartHook invoked (cwd=c:\Users\victo\Desktop\Cursor\MED)
 [2026-06-12T09:55:52.828Z] INFO  [SessionStartHook] No briefing generated (skipped or timed out)
+[2026-06-12T10:10:48.841Z] INFO  [PrepareMsgHook] === Prepare-commit-msg hook started (source: message) ===
+[2026-06-12T10:10:49.038Z] INFO  [PrepareMsgHook] === Prepare-commit-msg hook finished ===
+[2026-06-12T10:10:50.098Z] INFO  [PostCommitHook] Detected operation: commit
+[2026-06-12T10:10:50.444Z] INFO  [PostCommitHook] Enqueued: type=commit hash=b7c2fce8
+[2026-06-12T10:10:50.444Z] INFO  [QueueWorker] Launching background worker
+[2026-06-12T10:10:50.457Z] INFO  [QueueWorker] Background worker spawned (PID: 39052)
+[2026-06-12T10:10:50.598Z] INFO  [QueueWorker] === Queue worker started ===
+[2026-06-12T10:10:50.602Z] INFO  [StorageFactory] StorageFactory.create: storageMode=dual-write, projectPath=C:\Users\victo\Desktop\Cursor\MED
+[2026-06-12T10:10:50.932Z] INFO  [StorageFactory] Storage mode: dual-write (primary=orphan, shadow=folder)
+[2026-06-12T10:10:50.940Z] INFO  [QueueWorker] Processing queue entry: type=commit hash=b7c2fce8
+[2026-06-12T10:10:51.113Z] INFO  [GitOps] Commit b7c2fce8: first push frontend
+[2026-06-12T10:10:51.114Z] INFO  [QueueWorker] Commit: b7c2fce8 - first push frontend (160ms)
+[2026-06-12T10:10:51.116Z] INFO  [CodexDiscoverer] Discovered 0 Codex session(s)
+[2026-06-12T10:10:51.201Z] ERROR [CursorDiscoverer] Cursor scan failed (unknown): Cannot read properties of null (reading 'composerId')
+[2026-06-12T10:10:51.203Z] INFO  [QueueWorker] No active sessions found — will infer topics from diff if available
+[2026-06-12T10:10:51.536Z] WARN  [GitOps] Diff failed, trying diff of HEAD against empty tree
+[2026-06-12T10:10:52.054Z] INFO  [QueueWorker] Git diff: 0 files changed, +0 -0 (851ms)
+[2026-06-12T10:10:52.055Z] INFO  [QueueWorker] No new transcript entries and no file changes. Skipping summary generation.
+[2026-06-12T10:10:52.217Z] WARN  [SummaryStore] loadIndex: index.json unreadable from xs (fresh repo or backend read failed)
+[2026-06-12T10:10:52.220Z] INFO  [QueueWorker] Processed 1 queue entries
+[2026-06-12T10:10:52.221Z] INFO  [QueueWorker] === Queue worker finished ===
+[2026-06-12T10:10:52.476Z] INFO  [plans] detectPlans found 0 plans (0 in registry)
+[2026-06-12T10:10:52.566Z] INFO  [notes] detectNotes found 0 notes (0 in registry)
+[2026-06-12T10:10:53.269Z] INFO  [bridge] Merged mode activated {"branch":"main","creationPoint":"b7c2fce8","author":"Victor Haegeman"}
