@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../models/itinerary.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
-import 'impact_screen.dart';
 import 'results_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -38,43 +37,34 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: ListView(
             children: [
-              Expanded(
-                child: ListView(
-                  children: [
-                    _header(),
-                    const SizedBox(height: 20),
-                    _searchCard(),
-                    const SizedBox(height: 20),
-                    _sectionTitle('Modes activés'),
-                    const SizedBox(height: 8),
-                    _modeChips(),
-                    const SizedBox(height: 20),
-                    _sectionTitle('Récents'),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final r in _recents)
-                          MedChip(
-                            label: r,
-                            onTap: () {
-                              setState(() => _to = r);
-                              _search();
-                            },
-                          ),
-                      ],
+              _header(),
+              const SizedBox(height: 20),
+              _searchCard(),
+              const SizedBox(height: 20),
+              _sectionTitle('Modes activés'),
+              const SizedBox(height: 8),
+              _modeChips(),
+              const SizedBox(height: 20),
+              _sectionTitle('Récents'),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final r in _recents)
+                    MedChip(
+                      label: r,
+                      onTap: () {
+                        setState(() => _to = r);
+                        _search();
+                      },
                     ),
-                    const SizedBox(height: 20),
-                    _networkCard(),
-                  ],
-                ),
+                ],
               ),
-              const SizedBox(height: 12),
-              _bottomNav(),
+              const SizedBox(height: 20),
+              _networkCard(),
             ],
           ),
         ),
@@ -93,16 +83,20 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           child: const Text('MED',
               style: TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white)),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white)),
         ),
         const SizedBox(width: 10),
         const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Bonsoir Victor',
-                style: TextStyle(fontSize: 13, color: MedColors.secondary)),
+                style:
+                    TextStyle(fontSize: 13, color: MedColors.secondary)),
             Text('Où allez-vous ?',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                style: TextStyle(
+                    fontSize: 24, fontWeight: FontWeight.w800)),
           ],
         ),
       ],
@@ -156,7 +150,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 fontWeight: FontWeight.w500,
                 color: MedColors.secondary)),
         Text(value,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            style: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w600)),
       ],
     );
   }
@@ -195,8 +190,8 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Réseau intermodal',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-              // TODO(V1): brancher sur ConnectivityChecker.analyze().
+                  style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w700)),
               Text('● Connexe',
                   style: TextStyle(
                       fontSize: 11,
@@ -220,14 +215,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   mode: TransportMode.tram),
               SizedBox(width: 8),
               LineBadge(
-                  label: '87', color: MedColors.busGrey, mode: TransportMode.bus),
+                  label: '87',
+                  color: MedColors.busGrey,
+                  mode: TransportMode.bus),
               SizedBox(width: 8),
               Text('🚶', style: TextStyle(fontSize: 14)),
             ],
           ),
           const SizedBox(height: 10),
           const Text(
-            // TODO(V1): valeurs réelles depuis TransportGraph (nodeCount...).
             '1 842 nœuds · métro + tram + bus + marche · graphe vérifié au lancement',
             style: TextStyle(fontSize: 11, color: MedColors.secondary),
           ),
@@ -236,52 +232,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _bottomNav() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(
-        color: MedColors.surface,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _navItem('🔍', 'Recherche', active: true, onTap: () {}),
-          _navItem('🗺', 'Itinéraires', onTap: _search),
-          _navItem('🌱', 'Impact', onTap: _openImpact),
-          _navItem('⚙', 'Réseau', onTap: _openImpact),
-        ],
-      ),
-    );
-  }
-
-  void _openImpact() {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const ImpactScreen()));
-  }
-
-  Widget _navItem(String icon, String label,
-      {bool active = false, required VoidCallback onTap}) {
-    final color = active ? MedColors.accent : MedColors.secondary;
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Text(icon, style: TextStyle(fontSize: 16, color: color)),
-          const SizedBox(height: 3),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  color: color)),
-        ],
-      ),
-    );
-  }
-
   Widget _sectionTitle(String s) => Text(s,
       style: const TextStyle(
-          fontSize: 13, fontWeight: FontWeight.w600, color: MedColors.secondary));
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: MedColors.secondary));
 }
 
 class _FieldDot extends StatelessWidget {

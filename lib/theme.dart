@@ -28,10 +28,25 @@ ThemeData buildMedTheme() {
     colorScheme: base.colorScheme.copyWith(
       primary: MedColors.accent,
       surface: MedColors.surface,
+      surfaceContainer: MedColors.surface,
     ),
     textTheme: base.textTheme.apply(
       bodyColor: MedColors.text,
       displayColor: MedColors.text,
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: MedColors.surface,
+      indicatorColor: MedColors.accent.withValues(alpha: 0.2),
+      labelTextStyle: WidgetStateProperty.all(
+        const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return const IconThemeData(color: MedColors.accent, size: 22);
+        }
+        return const IconThemeData(color: MedColors.secondary, size: 22);
+      }),
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
     ),
   );
 }

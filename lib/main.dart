@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/home_screen.dart';
+import 'screens/main_shell.dart';
 import 'theme.dart';
 
 void main() {
@@ -18,7 +18,7 @@ class MedApp extends StatelessWidget {
       title: 'MED — Itinéraires Paris',
       debugShowCheckedModeBanner: false,
       theme: buildMedTheme(),
-      home: const HomeScreen(),
+      home: const MainShell(),
     );
   }
 }
