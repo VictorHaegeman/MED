@@ -1,0 +1,22 @@
+[2026-06-12T09:53:23.723Z] INFO  [SkillInstaller] Wrote SKILL.md (version 0.99.1) to C:\Users\victo\Desktop\Cursor\MED\.claude\skills\jolli-recall\SKILL.md
+[2026-06-12T09:53:23.725Z] INFO  [SkillInstaller] Wrote SKILL.md (version 0.99.1) to C:\Users\victo\Desktop\Cursor\MED\.claude\skills\jolli-search\SKILL.md
+[2026-06-12T09:53:23.729Z] INFO  [GitHookInstaller] Git post-commit hook installed
+[2026-06-12T09:53:23.730Z] INFO  [GitHookInstaller] Git post-rewrite hook installed
+[2026-06-12T09:53:23.732Z] INFO  [GitHookInstaller] Git prepare-commit-msg hook installed
+[2026-06-12T09:53:23.734Z] INFO  [Installer] Installation complete
+[2026-06-12T09:53:23.734Z] INFO  [Installer] Checking Jolli Memory status
+[2026-06-12T09:53:23.881Z] INFO  [Installer] Checking Jolli Memory status
+[2026-06-12T09:53:23.928Z] INFO  [CodexDiscoverer] Discovered 0 Codex session(s)
+[2026-06-12T09:53:23.938Z] ERROR [CursorDiscoverer] Cursor scan failed (unknown): Cannot read properties of null (reading 'composerId')
+[2026-06-12T09:53:24.040Z] INFO  [Installer] Status: enabled=true, claude=true, git=true, geminiHook=false, worktreeHooks=true, sessions=0, summaries=0, codex=true/true, gemini=false/undefined, enabledWorktrees=1, opencode=false/undefined, cursor=true/true, copilot=false/undefined, copilotChat=false
+[2026-06-12T09:53:24.041Z] INFO  [Installer] Checking Jolli Memory status
+[2026-06-12T09:53:24.075Z] INFO  [CodexDiscoverer] Discovered 0 Codex session(s)
+[2026-06-12T09:53:24.093Z] ERROR [CursorDiscoverer] Cursor scan failed (unknown): Cannot read properties of null (reading 'composerId')
+[2026-06-12T09:53:24.189Z] INFO  [Installer] Status: enabled=true, claude=true, git=true, geminiHook=false, worktreeHooks=true, sessions=0, summaries=0, codex=true/true, gemini=false/undefined, enabledWorktrees=1, opencode=false/undefined, cursor=true/true, copilot=false/undefined, copilotChat=false
+[2026-06-12T09:53:24.237Z] INFO  [CodexDiscoverer] Discovered 0 Codex session(s)
+[2026-06-12T09:53:24.249Z] ERROR [CursorDiscoverer] Cursor scan failed (unknown): Cannot read properties of null (reading 'composerId')
+[2026-06-12T09:53:24.345Z] INFO  [Installer] Status: enabled=true, claude=true, git=true, geminiHook=false, worktreeHooks=true, sessions=0, summaries=0, codex=true/true, gemini=false/undefined, enabledWorktrees=1, opencode=false/undefined, cursor=true/true, copilot=false/undefined, copilotChat=false
+[2026-06-12T09:55:49.055Z] INFO  [SessionStartHook] SessionStartHook invoked (cwd=c:\Users\victo\Desktop\Cursor\MED)
+[2026-06-12T09:55:49.160Z] INFO  [SessionStartHook] No briefing generated (skipped or timed out)
+[2026-06-12T09:55:52.768Z] INFO  [SessionStartHook] SessionStartHook invoked (cwd=c:\Users\victo\Desktop\Cursor\MED)
+[2026-06-12T09:55:52.828Z] INFO  [SessionStartHook] No briefing generated (skipped or timed out)
