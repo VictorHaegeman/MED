@@ -1,0 +1,2 @@
+lib/data/stop_times.txt filter=lfs diff=lfs merge=lfs -text
+lib/data/trips.txt filter=lfs diff=lfs merge=lfs -text
