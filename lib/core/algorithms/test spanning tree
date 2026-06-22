@@ -1,0 +1,58 @@
+// Tests de PrimMst.
+//
+// ⚠️ Ajuste les deux imports ci-dessous à l'arborescence réelle du projet
+// (ex. si spanning_tree.dart est dans lib/core/algorithms/).
+import 'package:test/test.dart';
+
+import '../lib/core/graph.dart';
+import '../lib/core/algorithms/spanning_tree.dart';
+
+/// Petit utilitaire : crée un nœud minimal (lat/lon factices).
+GraphNode _node(String id) =>
+    GraphNode(id: id, stationName: id, line: null, lat: 0, lon: 0);
+
+void main() {
+  group('PrimMst', () {
+    test('ACM d\'un graphe connu → poids total attendu', () {
+      // Graphe (vu non orienté) :
+      //   A-B=1, B-C=2, A-C=4, C-D=3, A-D=10
+      // ACM optimal : A-B(1) + B-C(2) + C-D(3) = 6
+      final g = TransportGraph();
+      for (final id in ['A', 'B', 'C', 'D']) {
+        g.addNode(_node(id));
+      }
+      void edge(String a, String b, double w) =>
+          g.addEdge(Edge(from: a, to: b, weightSeconds: w, type: EdgeType.ride));
+      edge('A', 'B', 1);
+      edge('B', 'C', 2);
+      edge('A', 'C', 4);
+      edge('C', 'D', 3);
+      edge('A', 'D', 10);
+
+      final result = PrimMst().compute(g);
+
+      expect(result.edges.length, equals(3)); // V - 1
+      expect(result.totalWeight, closeTo(6, 1e-9));
+    });
+
+    test('graphe non connexe → StateError', () {
+      final g = TransportGraph();
+      g.addNode(_node('A'));
+      g.addNode(_node('B'));
+      g.addNode(_node('Z')); // isolé, aucune arête
+      g.addEdge(
+          Edge(from: 'A', to: 'B', weightSeconds: 1, type: EdgeType.ride));
+
+      expect(() => PrimMst().compute(g), throwsStateError);
+    });
+
+    test('graphe trivial (0 ou 1 nœud) → arbre vide', () {
+      expect(PrimMst().compute(TransportGraph()).edges, isEmpty);
+
+      final single = TransportGraph()..addNode(_node('A'));
+      final r = PrimMst().compute(single);
+      expect(r.edges, isEmpty);
+      expect(r.totalWeight, equals(0));
+    });
+  });
+}
