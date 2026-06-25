@@ -1,6 +1,9 @@
 /// Cœur algorithmique — structure de graphe intermodal.
-///
 library;
+
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/services.dart' show rootBundle;
 
 /// Type d'arête du graphe intermodal.
 enum EdgeType { ride, transfer, walk }
@@ -23,12 +26,12 @@ class GraphNode {
     this.headsign,
   });
 
-  final String id; // ex: "chatelet#M1"
+  final String id; // ex: "IDFM:71673#IDFM:C01379"
   final String stationName;
   final String? line; // null pour un nœud "rue" (marche)
   final double lat;
   final double lon;
-  final String? lineColor;
+  final String? lineColor; // hex sans #, ex: "D2D200"
   final String? lineShortName;
   final int? routeType;
   final String? headsign;
@@ -74,16 +77,60 @@ class TransportGraph {
   /// Arêtes sortantes d'un nœud.
   List<Edge> neighbors(String nodeId) => _adjacency[nodeId] ?? const [];
 
-  /// TODO(V1): charger le graphe depuis l'asset généré par `data_pipeline/`
-  /// (GTFS Île-de-France Mobilités → format compact embarqué).
-  ///
-  /// Contrat attendu :
-  ///   - parsing en O(V+E), aucune requête réseau à l'exécution ;
-  ///   - documenter les hypothèses de pondération (temps inter-stations,
-  ///     pénalité de correspondance ~4 min) — exigence AO.
-  static Future<TransportGraph> fromAsset(String assetPath) {
-    throw UnimplementedError(
-      'V1 — à implémenter quand data-pipeline/ produira l\'asset graphe.',
-    );
+  /// Charge le graphe depuis l'asset JSON généré par data_pipeline/.
+  /// Parsing hors du thread UI via compute() pour ne pas bloquer l'interface.
+  static Future<TransportGraph> fromAsset(String assetPath) async {
+    final jsonString = await rootBundle.loadString(assetPath);
+    return compute(_parseGraph, jsonString);
+  }
+
+  static TransportGraph _parseGraph(String jsonString) {
+    final data = jsonDecode(jsonString) as Map<String, dynamic>;
+    final graph = TransportGraph();
+
+    for (final n in data['nodes'] as List<dynamic>) {
+      final m = n as Map<String, dynamic>;
+      graph.addNode(GraphNode(
+        id: m['id'] as String,
+        stationName: m['stationName'] as String,
+        line: m['line'] as String?,
+        lat: (m['lat'] as num).toDouble(),
+        lon: (m['lon'] as num).toDouble(),
+        lineColor: m['lineColor'] as String?,
+        lineShortName: m['lineShortName'] as String?,
+        routeType: m['routeType'] as int?,
+      ));
+    }
+
+    // Garde le meilleur arc par triple (from, to, type) — filet de sécurité
+    // contre les doublons résiduels dans le JSON.
+    final best = <String, Edge>{};
+    for (final e in data['edges'] as List<dynamic>) {
+      final m = e as Map<String, dynamic>;
+      final from = m['from'] as String;
+      final to = m['to'] as String;
+      final type = EdgeType.values.byName(m['type'] as String);
+      final w = (m['weightSeconds'] as num).toDouble();
+      final key = '$from|$to|${type.name}';
+      final ex = best[key];
+      if (ex == null || w < ex.weightSeconds) {
+        best[key] = Edge(
+          from: from,
+          to: to,
+          weightSeconds: w,
+          type: type,
+          headsign: m['headsign'] as String?,
+        );
+      }
+    }
+
+    for (final edge in best.values) {
+      if (graph.nodes.containsKey(edge.from) &&
+          graph.nodes.containsKey(edge.to)) {
+        graph.addEdge(edge);
+      }
+    }
+
+    return graph;
   }
 }

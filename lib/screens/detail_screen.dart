@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/itinerary.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
-import 'impact_screen.dart';
+import 'map_screen.dart';
 
 class DetailScreen extends StatelessWidget {
   const DetailScreen({super.key, required this.itinerary});
@@ -72,7 +72,22 @@ class DetailScreen extends StatelessWidget {
               PrimaryButton(
                 label: 'Démarrer le trajet',
                 onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ImpactScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => MapScreen(
+                      pathNodeIds: itinerary.pathNodeIds,
+                      totalSeconds: itinerary.totalSeconds,
+                      from: itinerary.legs
+                              .whereType<StationPoint>()
+                              .firstOrNull
+                              ?.name ??
+                          '',
+                      to: itinerary.legs
+                              .whereType<StationPoint>()
+                              .lastOrNull
+                              ?.name ??
+                          '',
+                    ),
+                  ),
                 ),
               ),
             ],

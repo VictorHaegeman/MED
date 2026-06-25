@@ -7,7 +7,7 @@ import '../../core/graph.dart';
 const String gtfsDir = 'assets/data';
 const String outputPath = 'assets/graph/idfm_graph.json';
 const int defaultTransferSeconds = 240; //4 minutes
-const Set<int> allowedRouteTypes = {1}; // 1 : métro
+const Set<int> allowedRouteTypes = {0, 1, 2}; // 0=tram, 1=métro, 2=RER
 
 List<String> splitTxtLine(String line) {
   final result = <String>[];
@@ -78,17 +78,21 @@ void main() {
     byTrip.putIfAbsent(st['trip_id']!, () => []).add(st);
   }
 
+  // Collecte le meilleur arc (poids minimal) par paire (from, to) — évite les
+  // doublons dus aux dizaines de courses qui empruntent le même arc physique.
+  final bestRideArc = <String, ({String from, String to, double weight, String? headsign})>{};
+
   for (final entry in byTrip.entries) {
     final routeId = routeIdByTripId[entry.key];
     if (routeId == null) continue;
 
     final routeType = typeByRouteId[routeId];
-    if (routeType != 1) continue; //on ne prend que les métros (1)
+    if (!allowedRouteTypes.contains(routeType)) continue;
 
     final seq = entry.value
       ..sort((a,b) =>
         int.parse(a['stop_sequence']!).compareTo(int.parse(b['stop_sequence']!)));
-    
+
     for (int i = 0; i < seq.length; i++) {
       final st = seq[i];
       final stop = stopById[st['stop_id']];
@@ -112,23 +116,39 @@ void main() {
       ));
 
       if (i > 0) {
-        final prevStop = stopById[seq[i - 1]['stop_id']];
+        final prevSt = seq[i - 1];
+        final prevStop = stopById[prevSt['stop_id']];
         if (prevStop == null) continue;
+        final prevLocType = int.tryParse(prevStop['location_type'] ?? '0') ?? 0;
+        if (prevLocType != 0) continue;
         final prevNodeId = '${stationKeyOf(prevStop)}#$routeId';
-        final weight = (timeToSeconds(st['departure_time']!) - 
-          timeToSeconds(seq[i-1]['departure_time']!))
-          .toDouble();
-        if (weight > 0 && prevNodeId != nodeId) {
-          graph.addEdge(Edge(
+        if (prevNodeId == nodeId) continue;
+        final weight = (timeToSeconds(st['departure_time']!) -
+          timeToSeconds(prevSt['departure_time']!)).toDouble();
+        if (weight <= 0) continue;
+        final arcKey = '$prevNodeId|$nodeId';
+        final existing = bestRideArc[arcKey];
+        if (existing == null || weight < existing.weight) {
+          bestRideArc[arcKey] = (
             from: prevNodeId,
             to: nodeId,
-            weightSeconds: weight,
-            type: EdgeType.ride,
-            headsign: headsignByTripId[entry.key],  
-          ));
+            weight: weight,
+            headsign: headsignByTripId[entry.key],
+          );
         }
       }
-      
+    }
+  }
+
+  for (final arc in bestRideArc.values) {
+    if (graph.nodes.containsKey(arc.from) && graph.nodes.containsKey(arc.to)) {
+      graph.addEdge(Edge(
+        from: arc.from,
+        to: arc.to,
+        weightSeconds: arc.weight,
+        type: EdgeType.ride,
+        headsign: arc.headsign,
+      ));
     }
   }
 
@@ -136,6 +156,8 @@ void main() {
   for (final node in graph.nodes.values) {
     nodesByStationKey.putIfAbsent(node.id.split('#').first, () => []).add(node.id);
   }
+
+  final seenTransfers = <String>{};
 
   for (final tr in transfers) {
     final fromStop = stopById[tr['from_stop_id']];
@@ -154,15 +176,17 @@ void main() {
     for (final f in fromNodes) {
       for (final t in toNodes) {
         if (f == t) continue;
+        if (!seenTransfers.add('$f|$t')) continue;
         graph.addEdge(Edge(from: f, to: t, weightSeconds: weight, type: EdgeType.transfer));
       }
     }
   }
- 
+
   for (final nodeIds in nodesByStationKey.values) {
     for (final f in nodeIds) {
       for (final t in nodeIds) {
         if (f == t) continue;
+        if (!seenTransfers.add('$f|$t')) continue;
         graph.addEdge(Edge(
           from: f,
           to: t,

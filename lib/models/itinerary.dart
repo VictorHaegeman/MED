@@ -52,6 +52,8 @@ class Itinerary {
     required this.legs,
     required this.summary,
     required this.perfNote,
+    this.pathNodeIds = const [],
+    this.totalSeconds = 0,
     this.highlighted = false,
   });
 
@@ -65,8 +67,14 @@ class Itinerary {
   final List<Leg> legs;
   final String summary;
 
-  /// Transparence algorithmique affichée dans l'UI (exigence de l'AO :
-  /// démontrer la qualité algorithmique, pas seulement l'interface).
+  /// Transparence algorithmique affichée dans l'UI (exigence de l'AO).
   final String perfNote;
+
+  /// Séquence ordonnée d'IDs de nœuds du chemin A* — utilisée par MapScreen.
+  final List<String> pathNodeIds;
+
+  /// Durée totale en secondes (valeur numérique brute pour calcul d'horaires).
+  final double totalSeconds;
+
   final bool highlighted;
 }

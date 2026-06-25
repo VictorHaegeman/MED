@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../core/router_service.dart';
+import '../main.dart'
+    show appGraph, pathNotifier, tripFromNotifier, tripSecondsNotifier, tripToNotifier;
 import '../models/itinerary.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -25,6 +27,15 @@ class _ResultsScreenState extends State<ResultsScreen> {
   void initState() {
     super.initState();
     _itineraries = _router.findItineraries(widget.from, widget.to);
+    // Publie le chemin du premier résultat dans le notifier partagé avec MapScreen.
+    _itineraries.then((list) {
+      if (list.isNotEmpty) {
+        pathNotifier.value = list.first.pathNodeIds;
+        tripSecondsNotifier.value = list.first.totalSeconds;
+        tripFromNotifier.value = widget.from;
+        tripToNotifier.value = widget.to;
+      }
+    });
   }
 
   @override
@@ -82,11 +93,10 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Center(
+              Center(
                 child: Text(
-                  // TODO(V1): valeurs réelles depuis ShortestPathResult.
-                  '4 itinéraires calculés en 11 ms · graphe intermodal 1 842 nœuds',
-                  style: TextStyle(fontSize: 11, color: MedColors.secondary),
+                  'Graphe intermodal · ${appGraph.nodeCount} stations · ${appGraph.edgeCount} connexions',
+                  style: const TextStyle(fontSize: 11, color: MedColors.secondary),
                 ),
               ),
             ],

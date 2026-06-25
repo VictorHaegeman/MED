@@ -1,9 +1,40 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:js_interop';
 
+import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
+
+import '../core/graph.dart' show GraphNode;
+import '../main.dart' show appGraph;
 import '../models/itinerary.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'results_screen.dart';
+
+// ---------------------------------------------------------------------------
+// JS Interop — Geolocation API (Dart 3.x)
+// ---------------------------------------------------------------------------
+
+extension type _JsCoords._(JSObject _) implements JSObject {
+  external double get latitude;
+  external double get longitude;
+}
+
+extension type _JsGeoposition._(JSObject _) implements JSObject {
+  external _JsCoords get coords;
+}
+
+extension type _JsGeolocation._(JSObject _) implements JSObject {
+  external void getCurrentPosition(JSFunction success, JSFunction error);
+}
+
+@JS('navigator.geolocation')
+external _JsGeolocation get _jsGeolocation;
+
+void _jsGetCurrentPosition(JSFunction success, JSFunction error) =>
+    _jsGeolocation.getCurrentPosition(success, error);
+
+// ---------------------------------------------------------------------------
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -13,23 +44,95 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _from = 'Gare de Lyon';
-  String _to = 'Porte de Versailles';
+  final _fromCtrl = TextEditingController();
+  final _toCtrl = TextEditingController();
   final Set<TransportMode> _enabledModes = {...TransportMode.values};
+  bool _locating = false;
 
-  static const _recents = ['EFREI — Villejuif', 'Châtelet', 'République'];
+  static const _recents = ['Châtelet', 'République', 'Nation'];
 
-  void _swap() => setState(() {
-        final tmp = _from;
-        _from = _to;
-        _to = tmp;
-      });
+  late final List<String> _stationNames = appGraph.nodes.values
+      .map((n) => n.stationName)
+      .toSet()
+      .toList()
+    ..sort();
+
+  @override
+  void dispose() {
+    _fromCtrl.dispose();
+    _toCtrl.dispose();
+    super.dispose();
+  }
+
+  void _swap() {
+    final tmp = _fromCtrl.text;
+    _fromCtrl.text = _toCtrl.text;
+    _toCtrl.text = tmp;
+  }
 
   void _search() {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ResultsScreen(from: _from, to: _to),
-    ));
+    final from = _fromCtrl.text.trim();
+    final to = _toCtrl.text.trim();
+    if (from.isEmpty || to.isEmpty) return;
+    Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ResultsScreen(from: from, to: to)));
   }
+
+  // -------------------------------------------------------------------------
+  // Géolocalisation → station la plus proche
+  // -------------------------------------------------------------------------
+
+  Future<void> _useMyLocation() async {
+    setState(() => _locating = true);
+    try {
+      final completer = Completer<(double, double)>();
+      _jsGetCurrentPosition(
+        ((JSAny? jsPos) {
+          final pos = jsPos as _JsGeoposition;
+          final coords = pos.coords;
+          completer.complete((coords.latitude, coords.longitude));
+        }).toJS,
+        ((JSAny? _) => completer.completeError('denied')).toJS,
+      );
+      final (lat, lon) =
+          await completer.future.timeout(const Duration(seconds: 12));
+      _setNearestStation(lat, lon);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Localisation non disponible — autorisez l\'accès dans le navigateur'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  void _setNearestStation(double lat, double lon) {
+    const dist = Distance();
+    GraphNode? nearest;
+    double minDist = double.infinity;
+    final seen = <String>{};
+    for (final node in appGraph.nodes.values) {
+      if (!seen.add(node.stationName)) continue;
+      final d = dist(LatLng(lat, lon), LatLng(node.lat, node.lon));
+      if (d < minDist) {
+        minDist = d;
+        nearest = node;
+      }
+    }
+    if (nearest != null && mounted) {
+      setState(() => _fromCtrl.text = nearest!.stationName);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Build
+  // -------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +160,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     MedChip(
                       label: r,
                       onTap: () {
-                        setState(() => _to = r);
+                        _toCtrl.text = r;
                         _search();
                       },
                     ),
@@ -92,11 +195,10 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Bonsoir Victor',
-                style:
-                    TextStyle(fontSize: 13, color: MedColors.secondary)),
+                style: TextStyle(fontSize: 13, color: MedColors.secondary)),
             Text('Où allez-vous ?',
-                style: TextStyle(
-                    fontSize: 24, fontWeight: FontWeight.w800)),
+                style:
+                    TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
           ],
         ),
       ],
@@ -107,16 +209,46 @@ class _HomeScreenState extends State<HomeScreen> {
     return MedCard(
       child: Column(
         children: [
+          // --- Champ Départ ---
           Row(
             children: [
               const _FieldDot(color: MedColors.green),
               const SizedBox(width: 10),
-              Expanded(child: _field('Départ', _from)),
+              Expanded(
+                child: _autocompleteField(
+                  'Départ',
+                  _fromCtrl,
+                  hint: 'Ma position ou station…',
+                ),
+              ),
+              // Bouton géolocalisation
+              GestureDetector(
+                onTap: _locating ? null : _useMyLocation,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  margin: const EdgeInsets.only(left: 6),
+                  decoration: BoxDecoration(
+                    color: MedColors.green.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: _locating
+                      ? const Padding(
+                          padding: EdgeInsets.all(9),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: MedColors.green),
+                        )
+                      : const Icon(Icons.my_location_rounded,
+                          size: 17, color: MedColors.green),
+                ),
+              ),
+              const SizedBox(width: 4),
+              // Bouton inverser
               GestureDetector(
                 onTap: _swap,
                 child: Container(
-                  width: 38,
-                  height: 38,
+                  width: 36,
+                  height: 36,
                   decoration: const BoxDecoration(
                       color: MedColors.surface2, shape: BoxShape.circle),
                   child: const Icon(Icons.swap_vert,
@@ -126,11 +258,18 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const Divider(color: MedColors.dividerColor, height: 22),
+          // --- Champ Arrivée ---
           Row(
             children: [
               const _FieldDot(color: MedColors.accent),
               const SizedBox(width: 10),
-              Expanded(child: _field('Arrivée', _to)),
+              Expanded(
+                child: _autocompleteField(
+                  'Arrivée',
+                  _toCtrl,
+                  hint: 'Station d\'arrivée…',
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -140,19 +279,79 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _field(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: MedColors.secondary)),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 16, fontWeight: FontWeight.w600)),
-      ],
+  Widget _autocompleteField(
+    String label,
+    TextEditingController ctrl, {
+    String hint = '',
+  }) {
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: ctrl.text),
+      optionsBuilder: (v) {
+        final q = v.text.toLowerCase();
+        if (q.isEmpty) return const [];
+        return _stationNames.where((s) => s.toLowerCase().contains(q)).take(8);
+      },
+      onSelected: (val) => ctrl.text = val,
+      fieldViewBuilder: (_, c, focus, onSubmit) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (c.text != ctrl.text) c.text = ctrl.text;
+        });
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: MedColors.secondary)),
+            TextField(
+              controller: c,
+              focusNode: focus,
+              onSubmitted: (_) => onSubmit(),
+              onChanged: (v) => ctrl.text = v,
+              style:
+                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                  hintText: hint,
+                  hintStyle: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                      color: MedColors.secondary),
+                  isDense: true,
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.zero),
+            ),
+          ],
+        );
+      },
+      optionsViewBuilder: (_, onSel, opts) => Align(
+        alignment: Alignment.topLeft,
+        child: Material(
+          color: MedColors.surface2,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 4,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240, maxWidth: 300),
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: opts.length,
+              itemBuilder: (_, i) {
+                final opt = opts.elementAt(i);
+                return InkWell(
+                  onTap: () => onSel(opt),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    child: Text(opt,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w500)),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -208,15 +407,10 @@ class _HomeScreenState extends State<HomeScreen> {
               SizedBox(width: 8),
               LineBadge(label: '14', color: MedColors.m14),
               SizedBox(width: 8),
-              LineBadge(
-                  label: 'T3a',
-                  color: MedColors.orange,
-                  darkText: true,
-                  mode: TransportMode.tram),
+              LineBadge(label: 'T3a', color: MedColors.orange,
+                  darkText: true, mode: TransportMode.tram),
               SizedBox(width: 8),
-              LineBadge(
-                  label: '87',
-                  color: MedColors.busGrey,
+              LineBadge(label: '87', color: MedColors.busGrey,
                   mode: TransportMode.bus),
               SizedBox(width: 8),
               Text('🚶', style: TextStyle(fontSize: 14)),
