@@ -20,5 +20,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   # TODO(V1): décommenter quand le pipeline data aura généré le graphe
-  # assets:
-  #   - assets/graph/idfm_graph.json
+  assets:
+    - assets/data
+    - assets/graph/idfm_graph.json
+  

@@ -1,7 +1,5 @@
 /// Cœur algorithmique — structure de graphe intermodal.
 ///
-/// Ce fichier est du Dart pur (aucun import Flutter) : le cœur se teste et se
-/// benchmarke sans interface, conformément au plan projet (§3).
 library;
 
 /// Type d'arête du graphe intermodal.
@@ -19,6 +17,10 @@ class GraphNode {
     required this.line,
     required this.lat,
     required this.lon,
+    this.lineColor,
+    this.lineShortName,
+    this.routeType, //0=tram, 1=métro, 2=train, 3=bus
+    this.headsign,
   });
 
   final String id; // ex: "chatelet#M1"
@@ -26,6 +28,10 @@ class GraphNode {
   final String? line; // null pour un nœud "rue" (marche)
   final double lat;
   final double lon;
+  final String? lineColor;
+  final String? lineShortName;
+  final int? routeType;
+  final String? headsign;
 }
 
 /// Arête orientée pondérée.
@@ -35,12 +41,14 @@ class Edge {
     required this.to,
     required this.weightSeconds,
     required this.type,
+    this.headsign,
   });
 
   final String from;
   final String to;
   final double weightSeconds;
   final EdgeType type;
+  final String? headsign;
 }
 
 /// Graphe orienté pondéré, en listes d'adjacence.
@@ -66,7 +74,7 @@ class TransportGraph {
   /// Arêtes sortantes d'un nœud.
   List<Edge> neighbors(String nodeId) => _adjacency[nodeId] ?? const [];
 
-  /// TODO(V1): charger le graphe depuis l'asset généré par `data-pipeline/`
+  /// TODO(V1): charger le graphe depuis l'asset généré par `data_pipeline/`
   /// (GTFS Île-de-France Mobilités → format compact embarqué).
   ///
   /// Contrat attendu :
