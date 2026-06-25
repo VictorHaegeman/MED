@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'network_tree_screen.dart';
 
 class ImpactScreen extends StatelessWidget {
   const ImpactScreen({super.key});
@@ -31,10 +32,11 @@ class ImpactScreen extends StatelessWidget {
               _benchmarkCard(),
               const SizedBox(height: 14),
               MedCard(
-                onTap: () {
-                  // TODO(V2): écran de visualisation de l'arborescence
-                  // (résultat de PrimMst.compute sur le graphe réel).
-                },
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const NetworkTreeScreen(),
+                  ),
+                ),
                 child: const Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
