@@ -7,6 +7,8 @@ import 'package:latlong2/latlong.dart';
 import '../core/graph.dart' show GraphNode;
 import '../main.dart' show appGraph;
 import '../models/itinerary.dart';
+import '../models/search_result.dart';
+import '../services/geocoding_service.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'results_screen.dart';
@@ -49,6 +51,17 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<TransportMode> _enabledModes = {...TransportMode.values};
   bool _locating = false;
 
+  // Suggestions pour chaque champ (stations + adresses mélangées)
+  List<SearchResult> _fromSuggestions = [];
+  List<SearchResult> _toSuggestions = [];
+
+  // Résultats sélectionnés — si null, on wrap le texte en SearchResult.station
+  SearchResult? _fromResult;
+  SearchResult? _toResult;
+
+  Timer? _fromDebounce;
+  Timer? _toDebounce;
+
   static const _recents = ['Châtelet', 'République', 'Nation'];
 
   late final List<String> _stationNames = appGraph.nodes.values
@@ -61,25 +74,72 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _fromCtrl.dispose();
     _toCtrl.dispose();
+    _fromDebounce?.cancel();
+    _toDebounce?.cancel();
     super.dispose();
   }
 
-  void _swap() {
-    final tmp = _fromCtrl.text;
-    _fromCtrl.text = _toCtrl.text;
-    _toCtrl.text = tmp;
+  // -------------------------------------------------------------------------
+  // Suggestions
+  // -------------------------------------------------------------------------
+
+  void _onFromChanged(String q) {
+    _fromResult = null;
+    _fromDebounce?.cancel();
+    _fromDebounce = Timer(const Duration(milliseconds: 350), () async {
+      final suggestions = await _buildSuggestions(q);
+      if (mounted) setState(() => _fromSuggestions = suggestions);
+    });
+    // Stations immédiates
+    setState(() {
+      _fromSuggestions = _stationMatches(q);
+    });
   }
 
-  void _search() {
-    final from = _fromCtrl.text.trim();
-    final to = _toCtrl.text.trim();
-    if (from.isEmpty || to.isEmpty) return;
-    Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ResultsScreen(from: from, to: to)));
+  void _onToChanged(String q) {
+    _toResult = null;
+    _toDebounce?.cancel();
+    _toDebounce = Timer(const Duration(milliseconds: 350), () async {
+      final suggestions = await _buildSuggestions(q);
+      if (mounted) setState(() => _toSuggestions = suggestions);
+    });
+    setState(() {
+      _toSuggestions = _stationMatches(q);
+    });
+  }
+
+  Future<List<SearchResult>> _buildSuggestions(String q) async {
+    if (q.trim().length < 2) return [];
+    final stations = _stationMatches(q);
+    final addresses = await GeocodingService.searchAddress(q, limit: 4);
+    // Stations en premier, adresses ensuite (dédupliquées)
+    return [...stations, ...addresses];
+  }
+
+  List<SearchResult> _stationMatches(String q) {
+    if (q.trim().isEmpty) return [];
+    final lower = q.toLowerCase();
+    return _stationNames
+        .where((s) => s.toLowerCase().contains(lower))
+        .take(5)
+        .map(SearchResult.station)
+        .toList();
+  }
+
+  void _selectFrom(SearchResult r) {
+    _fromResult = r;
+    _fromCtrl.text = r.displayName;
+    setState(() => _fromSuggestions = []);
+  }
+
+  void _selectTo(SearchResult r) {
+    _toResult = r;
+    _toCtrl.text = r.displayName;
+    setState(() => _toSuggestions = []);
   }
 
   // -------------------------------------------------------------------------
-  // Géolocalisation → station la plus proche
+  // Géolocalisation → vraie adresse (geocodage inverse)
   // -------------------------------------------------------------------------
 
   Future<void> _useMyLocation() async {
@@ -89,14 +149,21 @@ class _HomeScreenState extends State<HomeScreen> {
       _jsGetCurrentPosition(
         ((JSAny? jsPos) {
           final pos = jsPos as _JsGeoposition;
-          final coords = pos.coords;
-          completer.complete((coords.latitude, coords.longitude));
+          completer.complete((pos.coords.latitude, pos.coords.longitude));
         }).toJS,
         ((JSAny? _) => completer.completeError('denied')).toJS,
       );
       final (lat, lon) =
           await completer.future.timeout(const Duration(seconds: 12));
-      _setNearestStation(lat, lon);
+
+      // Essai de géocodage inverse
+      final address = await GeocodingService.reverseGeocode(lat, lon);
+      if (address != null) {
+        _selectFrom(address);
+      } else {
+        // Fallback : station la plus proche
+        _selectFrom(SearchResult.station(_nearestStationName(lat, lon)));
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -112,7 +179,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _setNearestStation(double lat, double lon) {
+  String _nearestStationName(double lat, double lon) {
     const dist = Distance();
     GraphNode? nearest;
     double minDist = double.infinity;
@@ -125,9 +192,36 @@ class _HomeScreenState extends State<HomeScreen> {
         nearest = node;
       }
     }
-    if (nearest != null && mounted) {
-      setState(() => _fromCtrl.text = nearest!.stationName);
-    }
+    return nearest?.stationName ?? '';
+  }
+
+  // -------------------------------------------------------------------------
+  // Navigation
+  // -------------------------------------------------------------------------
+
+  void _swap() {
+    final tmpText = _fromCtrl.text;
+    final tmpResult = _fromResult;
+    _fromCtrl.text = _toCtrl.text;
+    _fromResult = _toResult;
+    _toCtrl.text = tmpText;
+    _toResult = tmpResult;
+    setState(() {});
+  }
+
+  void _search() {
+    final fromText = _fromCtrl.text.trim();
+    final toText = _toCtrl.text.trim();
+    if (fromText.isEmpty || toText.isEmpty) return;
+    final from = _fromResult ?? SearchResult.station(fromText);
+    final to = _toResult ?? SearchResult.station(toText);
+    // Ferme les dropdowns
+    setState(() {
+      _fromSuggestions = [];
+      _toSuggestions = [];
+    });
+    Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ResultsScreen(from: from, to: to)));
   }
 
   // -------------------------------------------------------------------------
@@ -160,7 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     MedChip(
                       label: r,
                       onTap: () {
-                        _toCtrl.text = r;
+                        _selectTo(SearchResult.station(r));
                         _search();
                       },
                     ),
@@ -197,8 +291,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Bonsoir Victor',
                 style: TextStyle(fontSize: 13, color: MedColors.secondary)),
             Text('Où allez-vous ?',
-                style:
-                    TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
           ],
         ),
       ],
@@ -208,20 +301,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _searchCard() {
     return MedCard(
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // --- Champ Départ ---
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const _FieldDot(color: MedColors.green),
               const SizedBox(width: 10),
-              Expanded(
-                child: _autocompleteField(
-                  'Départ',
-                  _fromCtrl,
-                  hint: 'Ma position ou station…',
-                ),
-              ),
-              // Bouton géolocalisation
+              Expanded(child: _textField('Départ', _fromCtrl, _onFromChanged,
+                  hint: 'Adresse ou station…')),
+              // Géolocalisation
               GestureDetector(
                 onTap: _locating ? null : _useMyLocation,
                 child: Container(
@@ -243,7 +333,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const SizedBox(width: 4),
-              // Bouton inverser
+              // Inverser
               GestureDetector(
                 onTap: _swap,
                 child: Container(
@@ -257,21 +347,27 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          if (_fromSuggestions.isNotEmpty)
+            _SuggestionDropdown(
+              suggestions: _fromSuggestions,
+              onSelect: _selectFrom,
+            ),
           const Divider(color: MedColors.dividerColor, height: 22),
           // --- Champ Arrivée ---
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const _FieldDot(color: MedColors.accent),
               const SizedBox(width: 10),
-              Expanded(
-                child: _autocompleteField(
-                  'Arrivée',
-                  _toCtrl,
-                  hint: 'Station d\'arrivée…',
-                ),
-              ),
+              Expanded(child: _textField('Arrivée', _toCtrl, _onToChanged,
+                  hint: 'Adresse ou station…')),
             ],
           ),
+          if (_toSuggestions.isNotEmpty)
+            _SuggestionDropdown(
+              suggestions: _toSuggestions,
+              onSelect: _selectTo,
+            ),
           const SizedBox(height: 14),
           PrimaryButton(label: 'Rechercher un itinéraire', onTap: _search),
         ],
@@ -279,79 +375,37 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _autocompleteField(
+  Widget _textField(
     String label,
-    TextEditingController ctrl, {
+    TextEditingController ctrl,
+    void Function(String) onChanged, {
     String hint = '',
   }) {
-    return Autocomplete<String>(
-      initialValue: TextEditingValue(text: ctrl.text),
-      optionsBuilder: (v) {
-        final q = v.text.toLowerCase();
-        if (q.isEmpty) return const [];
-        return _stationNames.where((s) => s.toLowerCase().contains(q)).take(8);
-      },
-      onSelected: (val) => ctrl.text = val,
-      fieldViewBuilder: (_, c, focus, onSubmit) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (c.text != ctrl.text) c.text = ctrl.text;
-        });
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: MedColors.secondary)),
-            TextField(
-              controller: c,
-              focusNode: focus,
-              onSubmitted: (_) => onSubmit(),
-              onChanged: (v) => ctrl.text = v,
-              style:
-                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              decoration: InputDecoration(
-                  hintText: hint,
-                  hintStyle: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w400,
-                      color: MedColors.secondary),
-                  isDense: true,
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.zero),
-            ),
-          ],
-        );
-      },
-      optionsViewBuilder: (_, onSel, opts) => Align(
-        alignment: Alignment.topLeft,
-        child: Material(
-          color: MedColors.surface2,
-          borderRadius: BorderRadius.circular(12),
-          elevation: 4,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 240, maxWidth: 300),
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: opts.length,
-              itemBuilder: (_, i) {
-                final opt = opts.elementAt(i);
-                return InkWell(
-                  onTap: () => onSel(opt),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    child: Text(opt,
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w500)),
-                  ),
-                );
-              },
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: MedColors.secondary)),
+        TextField(
+          controller: ctrl,
+          onChanged: onChanged,
+          onSubmitted: (_) => _search(),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                color: MedColors.secondary),
+            isDense: true,
+            border: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
           ),
         ),
-      ),
+      ],
     );
   }
 
@@ -389,8 +443,7 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Réseau intermodal',
-                  style: TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w700)),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
               Text('● Connexe',
                   style: TextStyle(
                       fontSize: 11,
@@ -407,10 +460,15 @@ class _HomeScreenState extends State<HomeScreen> {
               SizedBox(width: 8),
               LineBadge(label: '14', color: MedColors.m14),
               SizedBox(width: 8),
-              LineBadge(label: 'T3a', color: MedColors.orange,
-                  darkText: true, mode: TransportMode.tram),
+              LineBadge(
+                  label: 'T3a',
+                  color: MedColors.orange,
+                  darkText: true,
+                  mode: TransportMode.tram),
               SizedBox(width: 8),
-              LineBadge(label: '87', color: MedColors.busGrey,
+              LineBadge(
+                  label: '87',
+                  color: MedColors.busGrey,
                   mode: TransportMode.bus),
               SizedBox(width: 8),
               Text('🚶', style: TextStyle(fontSize: 14)),
@@ -432,6 +490,73 @@ class _HomeScreenState extends State<HomeScreen> {
           fontWeight: FontWeight.w600,
           color: MedColors.secondary));
 }
+
+// ---------------------------------------------------------------------------
+// Dropdown de suggestions (stations + adresses)
+// ---------------------------------------------------------------------------
+
+class _SuggestionDropdown extends StatelessWidget {
+  const _SuggestionDropdown({
+    required this.suggestions,
+    required this.onSelect,
+  });
+
+  final List<SearchResult> suggestions;
+  final void Function(SearchResult) onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 4),
+      decoration: BoxDecoration(
+        color: MedColors.surface2,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: MedColors.dividerColor),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (int i = 0; i < suggestions.length; i++) ...[
+            InkWell(
+              onTap: () => onSelect(suggestions[i]),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(
+                      suggestions[i].isAddress
+                          ? Icons.location_on_outlined
+                          : Icons.train_rounded,
+                      size: 14,
+                      color: suggestions[i].isAddress
+                          ? MedColors.accent
+                          : MedColors.green,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        suggestions[i].displayName,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (i < suggestions.length - 1)
+              const Divider(height: 1, color: MedColors.dividerColor),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 class _FieldDot extends StatelessWidget {
   const _FieldDot({required this.color});

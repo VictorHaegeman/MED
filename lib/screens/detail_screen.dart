@@ -86,6 +86,10 @@ class DetailScreen extends StatelessWidget {
                               .lastOrNull
                               ?.name ??
                           '',
+                      fromLat: itinerary.fromLat,
+                      fromLon: itinerary.fromLon,
+                      toLat: itinerary.toLat,
+                      toLon: itinerary.toLon,
                     ),
                   ),
                 ),

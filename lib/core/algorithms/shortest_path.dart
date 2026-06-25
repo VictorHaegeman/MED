@@ -58,7 +58,12 @@ class ShortestPathResult {
 
 abstract interface class ShortestPathAlgorithm {
   String get name;
-  ShortestPathResult run(TransportGraph graph, String fromId, String toId);
+  ShortestPathResult run(
+    TransportGraph graph,
+    String fromId,
+    String toId, {
+    bool Function(Edge)? edgeFilter,
+  });
 }
 
 // ------------------------------------------------------
@@ -146,7 +151,12 @@ class Dijkstra implements ShortestPathAlgorithm {
   String get name => 'Dijkstra (tas binaire)';
 
   @override
-  ShortestPathResult run(TransportGraph graph, String fromId, String toId) {
+  ShortestPathResult run(
+    TransportGraph graph,
+    String fromId,
+    String toId, {
+    bool Function(Edge)? edgeFilter,
+  }) {
     final stopwatch = Stopwatch()..start();
 
     // Cas limite : départ == arrivée
@@ -200,6 +210,7 @@ class Dijkstra implements ShortestPathAlgorithm {
 
       // Relaxation des arêtes sortantes
       for (final edge in graph.neighbors(u)) {
+        if (edgeFilter != null && !edgeFilter(edge)) continue;
         final v = edge.to;
         final newDist = dU + edge.weightSeconds;
         if (newDist < (dist[v] ?? double.infinity)) {
@@ -257,7 +268,12 @@ class AStar implements ShortestPathAlgorithm {
   }
 
   @override
-  ShortestPathResult run(TransportGraph graph, String fromId, String toId) {
+  ShortestPathResult run(
+    TransportGraph graph,
+    String fromId,
+    String toId, {
+    bool Function(Edge)? edgeFilter,
+  }) {
     final stopwatch = Stopwatch()..start();
 
     // Cas limites identiques à Dijkstra
@@ -309,6 +325,7 @@ class AStar implements ShortestPathAlgorithm {
       final gU = gScore[u] ?? double.infinity;
 
       for (final edge in graph.neighbors(u)) {
+        if (edgeFilter != null && !edgeFilter(edge)) continue;
         final v = edge.to;
         final tentativeG = gU + edge.weightSeconds;
         if (tentativeG < (gScore[v] ?? double.infinity)) {

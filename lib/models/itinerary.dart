@@ -55,6 +55,10 @@ class Itinerary {
     this.pathNodeIds = const [],
     this.totalSeconds = 0,
     this.highlighted = false,
+    this.fromLat,
+    this.fromLon,
+    this.toLat,
+    this.toLon,
   });
 
   final String tag;
@@ -77,4 +81,11 @@ class Itinerary {
   final double totalSeconds;
 
   final bool highlighted;
+
+  /// Coordonnées de l'adresse de départ (si l'utilisateur a saisi une adresse,
+  /// pas une station). Utilisées pour dessiner le tronçon de marche sur la carte.
+  final double? fromLat;
+  final double? fromLon;
+  final double? toLat;
+  final double? toLon;
 }

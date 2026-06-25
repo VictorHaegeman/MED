@@ -15,23 +15,35 @@ class MapScreen extends StatelessWidget {
     this.totalSeconds,
     this.from,
     this.to,
+    this.fromLat,
+    this.fromLon,
+    this.toLat,
+    this.toLon,
   });
 
   final List<String>? pathNodeIds;
   final double? totalSeconds;
   final String? from;
   final String? to;
+  // Coordonnées de l'adresse de départ/arrivée (pour le tronçon marche en pointillés)
+  final double? fromLat;
+  final double? fromLon;
+  final double? toLat;
+  final double? toLon;
 
   @override
   Widget build(BuildContext context) {
     if (pathNodeIds != null) {
-      // Mode route — paramètres explicites, pas besoin des notifiers.
       return _MapView(
         pathNodeIds: pathNodeIds,
         totalSeconds: totalSeconds ?? 0,
         from: from ?? '',
         to: to ?? '',
         showDeparturePanel: true,
+        fromLat: fromLat,
+        fromLon: fromLon,
+        toLat: toLat,
+        toLon: toLon,
       );
     }
     // Mode onglet — écoute les notifiers globaux.
@@ -66,6 +78,10 @@ class _MapView extends StatefulWidget {
     this.from = '',
     this.to = '',
     this.showDeparturePanel = false,
+    this.fromLat,
+    this.fromLon,
+    this.toLat,
+    this.toLon,
   });
 
   final List<String>? pathNodeIds;
@@ -73,6 +89,10 @@ class _MapView extends StatefulWidget {
   final String from;
   final String to;
   final bool showDeparturePanel;
+  final double? fromLat;
+  final double? fromLon;
+  final double? toLat;
+  final double? toLon;
 
   @override
   State<_MapView> createState() => _MapViewState();
@@ -211,10 +231,43 @@ class _MapViewState extends State<_MapView> {
   // Build
   // -------------------------------------------------------------------------
 
+  /// Tronçons de marche en pointillés (adresse → 1ère station, dernière station → adresse).
+  List<List<LatLng>> get _walkPolylines {
+    if (!_hasPath) return [];
+    final g = appGraph;
+    final ids = widget.pathNodeIds!;
+    final result = <List<LatLng>>[];
+
+    // Départ depuis une adresse
+    if (widget.fromLat != null && widget.fromLon != null) {
+      final firstNode = g.nodes[ids.first];
+      if (firstNode != null) {
+        result.add([
+          LatLng(widget.fromLat!, widget.fromLon!),
+          LatLng(firstNode.lat, firstNode.lon),
+        ]);
+      }
+    }
+
+    // Arrivée vers une adresse
+    if (widget.toLat != null && widget.toLon != null) {
+      final lastNode = g.nodes[ids.last];
+      if (lastNode != null) {
+        result.add([
+          LatLng(lastNode.lat, lastNode.lon),
+          LatLng(widget.toLat!, widget.toLon!),
+        ]);
+      }
+    }
+
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
     final segs = _segments;
     final stations = _stations;
+    final walkLines = _walkPolylines;
     final hasBack = widget.showDeparturePanel;
 
     return Scaffold(
@@ -251,6 +304,43 @@ class _MapViewState extends State<_MapView> {
                         points: s.points,
                         color: s.color,
                         strokeWidth: 5.0,
+                      ),
+                  ],
+                ),
+              // Tronçons de marche en pointillés
+              if (walkLines.isNotEmpty)
+                PolylineLayer(
+                  polylines: [
+                    for (final pts in walkLines)
+                      Polyline(
+                        points: pts,
+                        color: Colors.white.withValues(alpha: 0.85),
+                        strokeWidth: 3.5,
+                        pattern: StrokePattern.dashed(
+                          segments: const [10, 7],
+                        ),
+                      ),
+                  ],
+                ),
+              // Marqueurs adresses (épingle blanche)
+              if (walkLines.isNotEmpty)
+                MarkerLayer(
+                  markers: [
+                    if (widget.fromLat != null && widget.fromLon != null)
+                      Marker(
+                        point: LatLng(widget.fromLat!, widget.fromLon!),
+                        width: 28,
+                        height: 28,
+                        alignment: Alignment.bottomCenter,
+                        child: const _AddressPin(),
+                      ),
+                    if (widget.toLat != null && widget.toLon != null)
+                      Marker(
+                        point: LatLng(widget.toLat!, widget.toLon!),
+                        width: 28,
+                        height: 28,
+                        alignment: Alignment.bottomCenter,
+                        child: const _AddressPin(),
                       ),
                   ],
                 ),
@@ -597,6 +687,39 @@ class _StationDot extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.2),
       ),
+    );
+  }
+}
+
+/// Épingle blanche pour les points adresse (départ/arrivée non-station).
+class _AddressPin extends StatelessWidget {
+  const _AddressPin();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4), blurRadius: 6),
+            ],
+          ),
+          child: const Icon(Icons.location_on_rounded,
+              size: 14, color: Colors.black87),
+        ),
+        Container(
+          width: 2,
+          height: 6,
+          color: Colors.white,
+        ),
+      ],
     );
   }
 }

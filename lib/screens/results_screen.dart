@@ -4,6 +4,7 @@ import '../core/router_service.dart';
 import '../main.dart'
     show appGraph, pathNotifier, tripFromNotifier, tripSecondsNotifier, tripToNotifier;
 import '../models/itinerary.dart';
+import '../models/search_result.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'detail_screen.dart';
@@ -11,8 +12,8 @@ import 'detail_screen.dart';
 class ResultsScreen extends StatefulWidget {
   const ResultsScreen({super.key, required this.from, required this.to});
 
-  final String from;
-  final String to;
+  final SearchResult from;
+  final SearchResult to;
 
   @override
   State<ResultsScreen> createState() => _ResultsScreenState();
@@ -27,13 +28,12 @@ class _ResultsScreenState extends State<ResultsScreen> {
   void initState() {
     super.initState();
     _itineraries = _router.findItineraries(widget.from, widget.to);
-    // Publie le chemin du premier résultat dans le notifier partagé avec MapScreen.
     _itineraries.then((list) {
       if (list.isNotEmpty) {
         pathNotifier.value = list.first.pathNodeIds;
         tripSecondsNotifier.value = list.first.totalSeconds;
-        tripFromNotifier.value = widget.from;
-        tripToNotifier.value = widget.to;
+        tripFromNotifier.value = widget.from.displayName;
+        tripToNotifier.value = widget.to.displayName;
       }
     });
   }
@@ -55,7 +55,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('${widget.from} → ${widget.to}',
+                        Text('${widget.from.displayName} → ${widget.to.displayName}',
                             style: const TextStyle(
                                 fontSize: 15, fontWeight: FontWeight.w700),
                             overflow: TextOverflow.ellipsis),
