@@ -18,6 +18,9 @@ final tripSecondsNotifier = ValueNotifier<double>(0);
 final tripFromNotifier = ValueNotifier<String>('');
 final tripToNotifier = ValueNotifier<String>('');
 
+// Incrémenté chaque fois qu'un trajet est sauvegardé → ImpactScreen se rafraîchit.
+final tripSavedNotifier = ValueNotifier<int>(0);
+
 void main() async {
   // Obligatoire avant tout appel à rootBundle ou compute() hors widget tree.
   WidgetsFlutterBinding.ensureInitialized();

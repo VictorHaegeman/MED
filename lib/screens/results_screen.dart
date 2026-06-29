@@ -21,22 +21,49 @@ class ResultsScreen extends StatefulWidget {
 
 class _ResultsScreenState extends State<ResultsScreen> {
   final _router = RouterService();
-  late final Future<List<Itinerary>> _itineraries;
+
+  // Résultats "Tous modes" — calculés une fois au démarrage.
+  late Future<List<Itinerary>> _baseItineraries;
+
+  // Résultats filtrés — recalculés à chaque changement de mode.
+  Future<List<Itinerary>>? _filteredItineraries;
+
   TransportMode? _filter; // null = Tous
 
   @override
   void initState() {
     super.initState();
-    _itineraries = _router.findItineraries(widget.from, widget.to);
-    _itineraries.then((list) {
-      if (list.isNotEmpty) {
-        pathNotifier.value = list.first.pathNodeIds;
-        tripSecondsNotifier.value = list.first.totalSeconds;
-        tripFromNotifier.value = widget.from.displayName;
-        tripToNotifier.value = widget.to.displayName;
+    _baseItineraries = _router.findItineraries(widget.from, widget.to);
+    _baseItineraries.then(_publishFirst);
+  }
+
+  void _publishFirst(List<Itinerary> list) {
+    if (list.isNotEmpty) {
+      pathNotifier.value = list.first.pathNodeIds;
+      tripSecondsNotifier.value = list.first.totalSeconds;
+      tripFromNotifier.value = widget.from.displayName;
+      tripToNotifier.value = widget.to.displayName;
+    }
+  }
+
+  void _setFilter(TransportMode? mode) {
+    setState(() {
+      _filter = mode;
+      if (mode == null) {
+        _filteredItineraries = null; // revient aux résultats de base
+      } else {
+        _filteredItineraries = _router
+            .findItineraries(widget.from, widget.to, modeFilter: mode)
+            .then((list) {
+          _publishFirst(list);
+          return list;
+        });
       }
     });
   }
+
+  Future<List<Itinerary>> get _currentFuture =>
+      _filter == null ? _baseItineraries : _filteredItineraries!;
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +74,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // En-tête
               Row(
                 children: [
                   const BackCircle(),
@@ -55,11 +83,13 @@ class _ResultsScreenState extends State<ResultsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('${widget.from.displayName} → ${widget.to.displayName}',
-                            style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w700),
-                            overflow: TextOverflow.ellipsis),
-                        const Text('Aujourd’hui · départ maintenant',
+                        Text(
+                          '${widget.from.displayName} → ${widget.to.displayName}',
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const Text('Aujourd\'hui · départ maintenant',
                             style: TextStyle(
                                 fontSize: 12, color: MedColors.secondary)),
                       ],
@@ -72,22 +102,22 @@ class _ResultsScreenState extends State<ResultsScreen> {
               const SizedBox(height: 12),
               Expanded(
                 child: FutureBuilder<List<Itinerary>>(
-                  future: _itineraries,
+                  key: ValueKey(_filter), // force rebuild quand le filtre change
+                  future: _currentFuture,
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) {
                       return const Center(
                           child: CircularProgressIndicator(
                               color: MedColors.accent));
                     }
-                    final visible = snapshot.data!
-                        .where((it) =>
-                            _filter == null || it.modes.contains(_filter))
-                        .toList();
+                    final list = snapshot.data!;
+                    if (list.isEmpty) {
+                      return _emptyState();
+                    }
                     return ListView.separated(
-                      itemCount: visible.length,
-                      separatorBuilder: (context, index) =>
-                          const SizedBox(height: 12),
-                      itemBuilder: (_, i) => _itineraryCard(visible[i]),
+                      itemCount: list.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (_, i) => _itineraryCard(list[i]),
                     );
                   },
                 ),
@@ -96,7 +126,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
               Center(
                 child: Text(
                   'Graphe intermodal · ${appGraph.nodeCount} stations · ${appGraph.edgeCount} connexions',
-                  style: const TextStyle(fontSize: 11, color: MedColors.secondary),
+                  style: const TextStyle(
+                      fontSize: 11, color: MedColors.secondary),
                 ),
               ),
             ],
@@ -112,7 +143,6 @@ class _ResultsScreenState extends State<ResultsScreen> {
       (TransportMode.metro, '🚇 Métro'),
       (TransportMode.tram, '🚊 Tram'),
       (TransportMode.bus, '🚌 Bus'),
-      (TransportMode.walk, '🚶 Marche'),
     ];
     return Wrap(
       spacing: 8,
@@ -122,15 +152,46 @@ class _ResultsScreenState extends State<ResultsScreen> {
           MedChip(
             label: label,
             selected: _filter == mode,
-            onTap: () => setState(() => _filter = mode),
+            onTap: () => _setFilter(mode),
           ),
       ],
     );
   }
 
+  Widget _emptyState() {
+    final modeName = switch (_filter) {
+      TransportMode.metro => 'métro ou RER',
+      TransportMode.tram => 'tram',
+      TransportMode.bus => 'bus',
+      _ => 'ce mode',
+    };
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('😕', style: TextStyle(fontSize: 40)),
+          const SizedBox(height: 12),
+          Text(
+            'Aucun itinéraire en $modeName\nentre ces deux points.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 14,
+                color: MedColors.secondary,
+                height: 1.5),
+          ),
+          const SizedBox(height: 16),
+          MedChip(
+            label: 'Voir tous les modes',
+            onTap: () => _setFilter(null),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _itineraryCard(Itinerary it) {
     return MedCard(
-      border: it.highlighted && _filter == null ? it.tagColor : null,
+      border: it.highlighted ? it.tagColor : null,
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => DetailScreen(itinerary: it)),
       ),
@@ -195,7 +256,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
 
   List<Widget> _rideBadges(Itinerary it) {
     final rides = it.legs.whereType<RideLeg>().toList();
-    if (rides.isEmpty) return [const Text('🚶', style: TextStyle(fontSize: 15))];
+    if (rides.isEmpty) {
+      return [const Text('🚶', style: TextStyle(fontSize: 15))];
+    }
     final widgets = <Widget>[];
     for (var i = 0; i < rides.length; i++) {
       final r = rides[i];

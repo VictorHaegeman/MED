@@ -63,6 +63,7 @@ abstract interface class ShortestPathAlgorithm {
     String fromId,
     String toId, {
     bool Function(Edge)? edgeFilter,
+    double transferPenaltySecs = 0,
   });
 }
 
@@ -156,6 +157,7 @@ class Dijkstra implements ShortestPathAlgorithm {
     String fromId,
     String toId, {
     bool Function(Edge)? edgeFilter,
+    double transferPenaltySecs = 0,
   }) {
     final stopwatch = Stopwatch()..start();
 
@@ -273,6 +275,7 @@ class AStar implements ShortestPathAlgorithm {
     String fromId,
     String toId, {
     bool Function(Edge)? edgeFilter,
+    double transferPenaltySecs = 0,
   }) {
     final stopwatch = Stopwatch()..start();
 
@@ -327,7 +330,11 @@ class AStar implements ShortestPathAlgorithm {
       for (final edge in graph.neighbors(u)) {
         if (edgeFilter != null && !edgeFilter(edge)) continue;
         final v = edge.to;
-        final tentativeG = gU + edge.weightSeconds;
+        final penalty =
+            transferPenaltySecs > 0 && edge.type == EdgeType.transfer
+                ? transferPenaltySecs
+                : 0.0;
+        final tentativeG = gU + edge.weightSeconds + penalty;
         if (tentativeG < (gScore[v] ?? double.infinity)) {
           gScore[v] = tentativeG;
           prev[v] = u;

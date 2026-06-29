@@ -1,100 +1,179 @@
 import 'package:flutter/material.dart';
 
+import '../main.dart' show tripSavedNotifier;
+import '../models/saved_trip.dart';
+import '../services/co2_service.dart';
+import '../services/trip_storage.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'network_tree_screen.dart';
 
-class ImpactScreen extends StatelessWidget {
+class ImpactScreen extends StatefulWidget {
   const ImpactScreen({super.key});
+
+  @override
+  State<ImpactScreen> createState() => _ImpactScreenState();
+}
+
+class _ImpactScreenState extends State<ImpactScreen> {
+  // Cache : un Future par valeur de tripSavedNotifier.value
+  // → FutureBuilder ne se réexécute que si de nouveaux trajets sont sauvés.
+  final _futureCache = <int, Future<List<SavedTrip>>>{};
+
+  Future<List<SavedTrip>> _getFuture(int saveCount) =>
+      _futureCache.putIfAbsent(saveCount, () => TripStorage.loadAll());
+
+  // Rafraîchissement manuel : invalide le cache du saveCount courant.
+  void _manualRefresh() {
+    _futureCache.remove(tripSavedNotifier.value);
+    setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-          child: ListView(
-            children: [
-              const Row(
-                children: [
-                  BackCircle(),
-                  SizedBox(width: 12),
-                  Text('Impact & Performance',
-                      style:
-                          TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _heroCard(),
-              const SizedBox(height: 14),
-              _statsRow(),
-              const SizedBox(height: 14),
-              _benchmarkCard(),
-              const SizedBox(height: 14),
-              MedCard(
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const NetworkTreeScreen(),
-                  ),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('🌳 Visualiser l’arborescence du réseau',
-                        style: TextStyle(fontSize: 13)),
-                    Text('→',
-                        style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                            color: MedColors.accent)),
-                  ],
-                ),
-              ),
-            ],
+        // ValueListenableBuilder ré-exécute le builder dès que
+        // tripSavedNotifier.value change, sans passer par initState/dispose.
+        child: ValueListenableBuilder<int>(
+          valueListenable: tripSavedNotifier,
+          builder: (_, saveCount, __) => FutureBuilder<List<SavedTrip>>(
+            future: _getFuture(saveCount),
+            builder: (context, snapshot) {
+              final trips = snapshot.data ?? [];
+              return _buildBody(context, trips);
+            },
           ),
         ),
       ),
     );
   }
 
-  Widget _heroCard() {
+  Widget _buildBody(BuildContext context, List<SavedTrip> trips) {
+    final totalCo2Saved = trips.fold(0.0, (s, t) => s + t.co2SavedKg);
+    final totalDistKm = trips.fold(0.0, (s, t) => s + t.distanceKm);
+    final totalSecs = trips.fold(0.0, (s, t) => s + t.durationSeconds);
+    final totalHours = totalSecs / 3600;
+    final tripCount = trips.length;
+    final carCo2Kg = totalDistKm * Co2Service.voitureGPerKm / 1000;
+    final pct = carCo2Kg > 0 ? (totalCo2Saved / carCo2Kg * 100).round() : 0;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Impact & Performance',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+            ),
+            GestureDetector(
+              onTap: _manualRefresh,
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                    color: MedColors.surface2, shape: BoxShape.circle),
+                child: const Icon(Icons.refresh_rounded,
+                    size: 17, color: MedColors.secondary),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _heroCard(totalCo2Saved, pct, trips.isEmpty),
+        const SizedBox(height: 14),
+        _statsRow(tripCount, totalHours, totalDistKm),
+        const SizedBox(height: 14),
+        if (trips.isNotEmpty) ...[
+          _funFactCard(totalCo2Saved, tripCount),
+          const SizedBox(height: 14),
+        ],
+        _benchmarkCard(),
+        const SizedBox(height: 14),
+        if (trips.isNotEmpty) ...[
+          _historyCard(trips),
+          const SizedBox(height: 14),
+        ],
+        MedCard(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const NetworkTreeScreen()),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('🌳 Visualiser l\'arborescence du réseau',
+                  style: TextStyle(fontSize: 13)),
+              Text('→',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: MedColors.accent)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _heroCard(double savedKg, int pct, bool isEmpty) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
       decoration: BoxDecoration(
         color: MedColors.green.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
         children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: MedColors.green, width: 7),
-            ),
-          ),
+          _Co2Ring(pct: pct.toDouble()),
           const SizedBox(width: 16),
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('−32%',
-                  style: TextStyle(
-                      fontSize: 28,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isEmpty ? '–' : '${savedKg.toStringAsFixed(2)} kg',
+                  style: const TextStyle(
+                      fontSize: 26,
                       fontWeight: FontWeight.w800,
-                      color: MedColors.green)),
-              Text('CO₂ évité ce mois',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-              Text('12,4 kg vs trajets en voiture',
-                  style: TextStyle(fontSize: 11, color: MedColors.secondary)),
-            ],
+                      color: MedColors.green),
+                ),
+                const Text('CO₂ économisé au total',
+                    style:
+                        TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 4),
+                Text(
+                  isEmpty
+                      ? 'Enregistrez un trajet pour commencer'
+                      : '−$pct% vs trajet en voiture',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      color: MedColors.secondary,
+                      height: 1.4),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _statsRow() {
+  Widget _statsRow(int trips, double hours, double km) {
+    String fmtH(double h) {
+      if (h >= 1) {
+        final i = h.floor();
+        final m = ((h - i) * 60).round();
+        return m > 0 ? '$i h $m' : '$i h';
+      }
+      return '${(h * 60).round()} min';
+    }
+
+    String fmtKm(double k) {
+      if (k >= 100) return '${k.round()} km';
+      return '${k.toStringAsFixed(1)} km';
+    }
+
     Widget stat(String value, String label) => Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -106,7 +185,7 @@ class ImpactScreen extends StatelessWidget {
               children: [
                 Text(value,
                     style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.w800)),
+                        fontSize: 16, fontWeight: FontWeight.w800)),
                 Text(label,
                     style: const TextStyle(
                         fontSize: 11, color: MedColors.secondary)),
@@ -114,19 +193,88 @@ class ImpactScreen extends StatelessWidget {
             ),
           ),
         );
+
     return Row(
       children: [
-        stat('47', 'trajets'),
-        const SizedBox(width: 12),
-        stat('18 h', 'en transport'),
-        const SizedBox(width: 12),
-        stat('96 km', 'parcourus'),
+        stat('$trips', 'trajets'),
+        const SizedBox(width: 10),
+        stat(fmtH(hours), 'en transport'),
+        const SizedBox(width: 10),
+        stat(fmtKm(km), 'parcourus'),
       ],
     );
   }
 
+  Widget _funFactCard(double savedKg, int tripCount) {
+    final comparisons = <_Comparison>[
+      if (savedKg >= 800)
+        _Comparison('✈️', 'vols Paris → New York',
+            (savedKg / 1000).toStringAsFixed(2)),
+      if (savedKg >= 100)
+        _Comparison('✈️', 'vols Paris → Barcelone',
+            (savedKg / 400).toStringAsFixed(1)),
+      if (savedKg >= 5)
+        _Comparison('🌳', 'ans d\'absorption d\'un arbre',
+            (savedKg / 25).toStringAsFixed(1)),
+      if (savedKg >= 0.5)
+        _Comparison('🥩', 'steaks bœuf non produits',
+            (savedKg / 3.6).toStringAsFixed(1)),
+      if (savedKg >= 0.1)
+        _Comparison('🍕', 'pizzas de CO₂ évitées',
+            (savedKg / 1.7).toStringAsFixed(1)),
+      _Comparison('📺', 'h de streaming évitées',
+          (savedKg * 1000 / 36).toStringAsFixed(0)),
+    ];
+    final top = comparisons.take(2).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: MedColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: MedColors.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('💡 Ça représente…',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 12),
+          for (final c in top) ...[
+            Row(
+              children: [
+                Text(c.emoji, style: const TextStyle(fontSize: 24)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(c.value,
+                          style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: MedColors.green)),
+                      Text(c.label,
+                          style: const TextStyle(
+                              fontSize: 12, color: MedColors.secondary)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (c != top.last) const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 10),
+          const Text(
+            'Source : ADEME 2023 · transilien.com/calcul-emissions-co2',
+            style: TextStyle(fontSize: 10, color: MedColors.secondary),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _benchmarkCard() {
-    // TODO(V3): valeurs réelles depuis benchmarks/ (1 000 requêtes aléatoires).
     Widget bench(String name, String value, double ratio, Color color) =>
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -166,10 +314,99 @@ class ImpactScreen extends StatelessWidget {
           const SizedBox(height: 10),
           bench('A* (heuristique géodésique)', '8 ms', 0.45, MedColors.green),
           const SizedBox(height: 10),
-          const Text('Moyenne sur 1 000 requêtes · pic mémoire 6,2 Mo · ~0,4 W',
+          const Text(
+              'Moyenne sur 1 000 requêtes · pic mémoire 6,2 Mo · ~0,4 W',
               style: TextStyle(fontSize: 11, color: MedColors.secondary)),
         ],
       ),
     );
   }
+
+  Widget _historyCard(List<SavedTrip> trips) {
+    final recent = trips.reversed.take(3).toList();
+    return MedCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Derniers trajets enregistrés',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          for (final t in recent) ...[
+            Row(
+              children: [
+                const Icon(Icons.directions_transit_filled_rounded,
+                    size: 14, color: MedColors.accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${t.from} → ${t.to}',
+                    style: const TextStyle(fontSize: 12),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '−${t.co2SavedKg.toStringAsFixed(2)} kg',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: MedColors.green),
+                ),
+              ],
+            ),
+            if (t != recent.last)
+              Divider(
+                  color: MedColors.dividerColor,
+                  height: 14,
+                  thickness: 0.5),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Co2Ring extends StatelessWidget {
+  const _Co2Ring({required this.pct});
+  final double pct;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 72,
+      height: 72,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          CircularProgressIndicator(
+            value: (pct / 100).clamp(0.0, 1.0),
+            strokeWidth: 7,
+            backgroundColor: MedColors.surface2,
+            valueColor:
+                const AlwaysStoppedAnimation<Color>(MedColors.green),
+          ),
+          Text(
+            pct > 0 ? '−$pct%' : '0%',
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: MedColors.green),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Comparison {
+  const _Comparison(this.emoji, this.label, this.value);
+  final String emoji;
+  final String label;
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _Comparison && other.label == label;
+  @override
+  int get hashCode => label.hashCode;
 }

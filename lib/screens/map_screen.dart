@@ -3,11 +3,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../core/graph.dart' show GraphNode;
-import '../main.dart' show appGraph, pathNotifier, tripSecondsNotifier, tripFromNotifier, tripToNotifier;
+import '../main.dart'
+    show appGraph, pathNotifier, tripSecondsNotifier, tripFromNotifier, tripToNotifier, tripSavedNotifier;
+import '../models/saved_trip.dart';
+import '../services/co2_service.dart';
+import '../services/trip_storage.dart';
 import '../theme.dart';
 
-/// Appelé sans paramètres depuis le shell (onglet Carte) — lit les notifiers.
-/// Appelé avec paramètres depuis DetailScreen ("Démarrer le trajet").
 class MapScreen extends StatelessWidget {
   const MapScreen({
     super.key,
@@ -25,7 +27,6 @@ class MapScreen extends StatelessWidget {
   final double? totalSeconds;
   final String? from;
   final String? to;
-  // Coordonnées de l'adresse de départ/arrivée (pour le tronçon marche en pointillés)
   final double? fromLat;
   final double? fromLon;
   final double? toLat;
@@ -46,7 +47,6 @@ class MapScreen extends StatelessWidget {
         toLon: toLon,
       );
     }
-    // Mode onglet — écoute les notifiers globaux.
     return ValueListenableBuilder<List<String>?>(
       valueListenable: pathNotifier,
       builder: (_, ids, __) => ValueListenableBuilder<double>(
@@ -99,15 +99,58 @@ class _MapView extends StatefulWidget {
 }
 
 class _MapViewState extends State<_MapView> {
+  bool _tripSaved = false;
+
   bool get _hasPath =>
       widget.pathNodeIds != null && widget.pathNodeIds!.isNotEmpty;
 
+  Co2Result get _co2 {
+    if (!_hasPath) return const Co2Result(distanceKm: 0, savedKg: 0);
+    return Co2Service.forPath(appGraph, widget.pathNodeIds!);
+  }
+
+  Future<void> _saveTrip() async {
+    if (_tripSaved || !_hasPath) return;
+    final co2 = _co2;
+    await TripStorage.save(SavedTrip(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      date: DateTime.now(),
+      from: widget.from,
+      to: widget.to,
+      distanceKm: co2.distanceKm,
+      durationSeconds: widget.totalSeconds,
+      co2SavedKg: co2.savedKg,
+    ));
+    tripSavedNotifier.value++;
+    if (!mounted) return;
+    setState(() => _tripSaved = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded,
+                color: MedColors.green, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Trajet enregistré · ${co2.savedKg.toStringAsFixed(2)} kg CO₂ économisés',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: MedColors.surface2,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   // -------------------------------------------------------------------------
-  // Stations clés : départ, correspondances, arrivée uniquement
+  // Stations clés
   // -------------------------------------------------------------------------
 
-  /// Retourne les IDs de nœuds qui méritent un label :
-  /// premier nœud, dernier nœud, et chaque nœud où la ligne change.
   Set<String> get _keyNodeIds {
     final ids = widget.pathNodeIds;
     if (ids == null || ids.isEmpty) return {};
@@ -117,10 +160,7 @@ class _MapViewState extends State<_MapView> {
       final prevLine = g.nodes[ids[i - 1]]?.line;
       final currLine = g.nodes[ids[i]]?.line;
       final nextLine = g.nodes[ids[i + 1]]?.line;
-      // Début ou fin d'un segment de ligne → point clé (correspondance)
-      if (currLine != prevLine || currLine != nextLine) {
-        keys.add(ids[i]);
-      }
+      if (currLine != prevLine || currLine != nextLine) keys.add(ids[i]);
     }
     return keys;
   }
@@ -135,18 +175,16 @@ class _MapViewState extends State<_MapView> {
       for (int i = 0; i < ids.length; i++) {
         final node = g.nodes[ids[i]];
         if (node == null || !seen.add(node.stationName)) continue;
-        final isKey = keys.contains(ids[i]);
         result.add(_Station(
           name: node.stationName,
           lat: node.lat,
           lng: node.lon,
           color: _colorFromHex(node.lineColor),
-          isKey: isKey,
+          isKey: keys.contains(ids[i]),
         ));
       }
       return result;
     }
-    // Vue réseau : un point par station, pas de label
     final seen = <String>{};
     return g.nodes.values
         .where((n) => seen.add(n.stationName))
@@ -168,7 +206,10 @@ class _MapViewState extends State<_MapView> {
     int segStart = 0;
     for (int i = 1; i <= ids.length; i++) {
       final prev = g.nodes[ids[i - 1]];
-      if (prev == null) { segStart = i; continue; }
+      if (prev == null) {
+        segStart = i;
+        continue;
+      }
       final nextLine = i < ids.length ? g.nodes[ids[i]]?.line : null;
       if (i == ids.length || nextLine != prev.line) {
         final pts = ids
@@ -177,9 +218,7 @@ class _MapViewState extends State<_MapView> {
             .whereType<GraphNode>()
             .map((n) => LatLng(n.lat, n.lon))
             .toList();
-        if (pts.length >= 2) {
-          result.add(_Segment(_colorFromHex(prev.lineColor), pts));
-        }
+        if (pts.length >= 2) result.add(_Segment(_colorFromHex(prev.lineColor), pts));
         segStart = i;
       }
     }
@@ -208,37 +247,22 @@ class _MapViewState extends State<_MapView> {
     return v != null ? Color(0xFF000000 | v) : MedColors.accent;
   }
 
-  // -------------------------------------------------------------------------
-  // Horaires
-  // -------------------------------------------------------------------------
-
   String _fmt(DateTime t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   String get _departureTime => _fmt(DateTime.now());
-
   String get _arrivalTime =>
       _fmt(DateTime.now().add(Duration(seconds: widget.totalSeconds.round())));
-
-  /// Prochain départ estimé : arrondi à la prochaine minute pleine + 1 min.
   String get _nextDeparture {
     final now = DateTime.now();
-    final next = now.add(Duration(minutes: 1, seconds: 60 - now.second));
-    return _fmt(next);
+    return _fmt(now.add(Duration(minutes: 1, seconds: 60 - now.second)));
   }
 
-  // -------------------------------------------------------------------------
-  // Build
-  // -------------------------------------------------------------------------
-
-  /// Tronçons de marche en pointillés (adresse → 1ère station, dernière station → adresse).
   List<List<LatLng>> get _walkPolylines {
     if (!_hasPath) return [];
     final g = appGraph;
     final ids = widget.pathNodeIds!;
     final result = <List<LatLng>>[];
-
-    // Départ depuis une adresse
     if (widget.fromLat != null && widget.fromLon != null) {
       final firstNode = g.nodes[ids.first];
       if (firstNode != null) {
@@ -248,8 +272,6 @@ class _MapViewState extends State<_MapView> {
         ]);
       }
     }
-
-    // Arrivée vers une adresse
     if (widget.toLat != null && widget.toLon != null) {
       final lastNode = g.nodes[ids.last];
       if (lastNode != null) {
@@ -259,7 +281,6 @@ class _MapViewState extends State<_MapView> {
         ]);
       }
     }
-
     return result;
   }
 
@@ -307,7 +328,6 @@ class _MapViewState extends State<_MapView> {
                       ),
                   ],
                 ),
-              // Tronçons de marche en pointillés
               if (walkLines.isNotEmpty)
                 PolylineLayer(
                   polylines: [
@@ -316,13 +336,10 @@ class _MapViewState extends State<_MapView> {
                         points: pts,
                         color: Colors.white.withValues(alpha: 0.85),
                         strokeWidth: 3.5,
-                        pattern: StrokePattern.dashed(
-                          segments: const [10, 7],
-                        ),
+                        pattern: StrokePattern.dashed(segments: const [10, 7]),
                       ),
                   ],
                 ),
-              // Marqueurs adresses (épingle blanche)
               if (walkLines.isNotEmpty)
                 MarkerLayer(
                   markers: [
@@ -368,7 +385,8 @@ class _MapViewState extends State<_MapView> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: MedColors.surface.withValues(alpha: 0.94),
                   borderRadius: BorderRadius.circular(16),
@@ -384,12 +402,14 @@ class _MapViewState extends State<_MapView> {
                           height: 32,
                           margin: const EdgeInsets.only(right: 10),
                           decoration: const BoxDecoration(
-                              color: MedColors.surface2, shape: BoxShape.circle),
+                              color: MedColors.surface2,
+                              shape: BoxShape.circle),
                           child: const Icon(Icons.arrow_back_ios_new_rounded,
                               size: 14, color: MedColors.text),
                         ),
                       ),
-                    const Icon(Icons.map_rounded, color: MedColors.accent, size: 16),
+                    const Icon(Icons.map_rounded,
+                        color: MedColors.accent, size: 16),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -407,7 +427,7 @@ class _MapViewState extends State<_MapView> {
             ),
           ),
 
-          // Panneau de départ (mode "Démarrer le trajet")
+          // Panneau de départ
           if (_hasPath && hasBack)
             Positioned(
               bottom: 0,
@@ -418,10 +438,13 @@ class _MapViewState extends State<_MapView> {
                 arrivalTime: _arrivalTime,
                 nextDeparture: _nextDeparture,
                 totalSeconds: widget.totalSeconds,
+                co2SavedKg: _co2.savedKg,
+                saved: _tripSaved,
+                onSave: _saveTrip,
               ),
             ),
 
-          // Infos réseau (mode onglet, sans trajet)
+          // Infos réseau (onglet carte)
           if (!hasBack)
             Positioned(
               bottom: 0,
@@ -460,7 +483,7 @@ class _MapViewState extends State<_MapView> {
 }
 
 // ---------------------------------------------------------------------------
-// Panneau horaires
+// Panneau horaires + enregistrement
 // ---------------------------------------------------------------------------
 
 class _DeparturePanel extends StatelessWidget {
@@ -469,12 +492,18 @@ class _DeparturePanel extends StatelessWidget {
     required this.arrivalTime,
     required this.nextDeparture,
     required this.totalSeconds,
+    required this.co2SavedKg,
+    required this.saved,
+    required this.onSave,
   });
 
   final String departureTime;
   final String arrivalTime;
   final String nextDeparture;
   final double totalSeconds;
+  final double co2SavedKg;
+  final bool saved;
+  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -483,8 +512,8 @@ class _DeparturePanel extends StatelessWidget {
       decoration: BoxDecoration(
         color: MedColors.surface,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border:
-            Border(top: BorderSide(color: MedColors.dividerColor, width: 0.8)),
+        border: Border(
+            top: BorderSide(color: MedColors.dividerColor, width: 0.8)),
         boxShadow: [
           BoxShadow(
               color: Colors.black.withValues(alpha: 0.3),
@@ -506,6 +535,7 @@ class _DeparturePanel extends StatelessWidget {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
+          // Départ / Arrivée
           Row(
             children: [
               Expanded(
@@ -528,9 +558,9 @@ class _DeparturePanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
+          // Prochain départ
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
               color: MedColors.surface2,
               borderRadius: BorderRadius.circular(12),
@@ -547,8 +577,8 @@ class _DeparturePanel extends StatelessWidget {
                 ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: MedColors.accent.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(99),
@@ -562,6 +592,46 @@ class _DeparturePanel extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Bouton enregistrer
+          GestureDetector(
+            onTap: saved ? null : onSave,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+              decoration: BoxDecoration(
+                color: saved
+                    ? MedColors.green.withValues(alpha: 0.15)
+                    : MedColors.green,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    saved
+                        ? Icons.check_circle_rounded
+                        : Icons.save_alt_rounded,
+                    color: saved ? MedColors.green : Colors.black,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    saved
+                        ? 'Trajet enregistré · ${co2SavedKg.toStringAsFixed(2)} kg CO₂ éco.'
+                        : 'Enregistrer ce trajet',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: saved ? MedColors.green : Colors.black,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -590,8 +660,8 @@ class _TimeCell extends StatelessWidget {
         Icon(icon, color: iconColor, size: 18),
         const SizedBox(height: 4),
         Text(label,
-            style: const TextStyle(
-                fontSize: 10, color: MedColors.secondary)),
+            style:
+                const TextStyle(fontSize: 10, color: MedColors.secondary)),
         const SizedBox(height: 2),
         Text(time,
             style: const TextStyle(
@@ -606,18 +676,17 @@ class _TimeCell extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _Station {
-  const _Station({
-    required this.name,
-    required this.lat,
-    required this.lng,
-    required this.color,
-    required this.isKey,
-  });
+  const _Station(
+      {required this.name,
+      required this.lat,
+      required this.lng,
+      required this.color,
+      required this.isKey});
   final String name;
   final double lat;
   final double lng;
   final Color color;
-  final bool isKey; // true = départ, correspondance ou arrivée
+  final bool isKey;
 }
 
 class _Segment {
@@ -646,10 +715,7 @@ class _StationLabel extends StatelessWidget {
           child: Text(
             name,
             style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: color,
-            ),
+                fontSize: 10, fontWeight: FontWeight.w700, color: color),
             textAlign: TextAlign.center,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -685,13 +751,13 @@ class _StationDot extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.2),
+        border:
+            Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.2),
       ),
     );
   }
 }
 
-/// Épingle blanche pour les points adresse (départ/arrivée non-station).
 class _AddressPin extends StatelessWidget {
   const _AddressPin();
 
@@ -714,11 +780,7 @@ class _AddressPin extends StatelessWidget {
           child: const Icon(Icons.location_on_rounded,
               size: 14, color: Colors.black87),
         ),
-        Container(
-          width: 2,
-          height: 6,
-          color: Colors.white,
-        ),
+        Container(width: 2, height: 6, color: Colors.white),
       ],
     );
   }
