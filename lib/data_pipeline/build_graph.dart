@@ -1,13 +1,14 @@
 // Transformation des données GTFS en graphe compact
+// flutter test lib/data_pipeline/build_graph.dart pour lancer le fichier et refaire le json
 
 import 'dart:convert';
 import 'dart:io';
-import '../../core/graph.dart';
+import '../core/graph.dart';
 
 const String gtfsDir = 'assets/data';
 const String outputPath = 'assets/graph/idfm_graph.json';
 const int defaultTransferSeconds = 240; //4 minutes
-const Set<int> allowedRouteTypes = {0, 1, 2}; // 0=tram, 1=métro, 2=RER
+const Set<int> allowedRouteTypes = {0, 1, 2, 3}; // 0=tram, 1=métro, 2=RER, 3=bus
 
 List<String> splitTxtLine(String line) {
   final result = <String>[];
