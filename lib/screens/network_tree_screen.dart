@@ -60,45 +60,58 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
 
   /// Transforme l'ACM (liste d'arêtes) en primitives dessinables.
   void _prepareRenderData() {
-    // Racine de l'arborescence = l'unique nœud qui n'est jamais un "enfant".
+    // Racine = nœud jamais "enfant"
     final children = _mst.edges.map((e) => e.to).toSet();
     final rootId =
         _graph.nodes.keys.firstWhere((id) => !children.contains(id));
     _rootStation = _graph.nodes[rootId]!.stationName;
 
-    // Segments : uniquement les arêtes "ride" (extrémités sur une même ligne,
-    // donc géographiquement distinctes). Les "transfer" ont une longueur nulle.
+    // Segments ride uniquement (les transfer sont à distance nulle)
     for (final e in _mst.edges) {
       final a = _graph.nodes[e.from];
       final b = _graph.nodes[e.to];
       if (a == null || b == null) continue;
-      final sameLine = a.line != null && a.line == b.line;
-      if (sameLine) {
+      if (a.line != null && a.line == b.line) {
         _segments.add(_RideSegment(
           from: LatLng(a.lat, a.lon),
           to: LatLng(b.lat, b.lon),
-          color: _lineColor(a.line),
+          color: _nodeColor(a),
         ));
       }
     }
 
-    // Marqueurs : un par station physique. Plusieurs lignes ⇒ pôle d'échange.
+    // Un marqueur par station physique
     final linesPerStation = <String, Set<String>>{};
+    final colorPerStation = <String, Color>{};
     final coordPerStation = <String, LatLng>{};
     for (final node in _graph.nodes.values) {
       linesPerStation
           .putIfAbsent(node.stationName, () => {})
           .add(node.line ?? '—');
       coordPerStation[node.stationName] = LatLng(node.lat, node.lon);
+      colorPerStation[node.stationName] = _nodeColor(node);
     }
     for (final entry in coordPerStation.entries) {
+      final isHub = (linesPerStation[entry.key]?.length ?? 0) > 1;
+      final isRoot = entry.key == _rootStation;
       _stations.add(_StationDot(
         name: entry.key,
         pos: entry.value,
-        isHub: (linesPerStation[entry.key]?.length ?? 0) > 1,
-        isRoot: entry.key == _rootStation,
+        // N'afficher le label que pour les pôles et la racine
+        showLabel: isHub || isRoot,
+        isHub: isHub,
+        isRoot: isRoot,
+        color: colorPerStation[entry.key] ?? MedColors.secondary,
       ));
     }
+  }
+
+  Color _nodeColor(GraphNode node) {
+    if (node.lineColor == null || node.lineColor!.isEmpty) {
+      return MedColors.secondary;
+    }
+    final v = int.tryParse(node.lineColor!.padLeft(6, '0'), radix: 16);
+    return v != null ? Color(0xFF000000 | v) : MedColors.secondary;
   }
 
   @override
@@ -155,8 +168,8 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
             for (final st in _stations)
               Marker(
                 point: st.pos,
-                width: 130,
-                height: 48,
+                width: st.showLabel ? 130 : 14,
+                height: st.showLabel ? 48 : 14,
                 alignment: Alignment.bottomCenter,
                 child: _StationMarker(station: st),
               ),
@@ -276,26 +289,37 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
   }
 
   Widget _legend() {
-    final lines = <String>{};
+    // Lignes uniques avec leurs couleurs réelles depuis le graphe
+    final seen = <String>{};
+    final entries = <(String, Color, bool)>[];
     for (final node in _graph.nodes.values) {
-      if (node.line != null) lines.add(node.line!);
+      final name = node.lineShortName ?? node.line;
+      if (name == null || !seen.add(name)) continue;
+      final color = _nodeColor(node);
+      final lum = _luminance(node.lineColor);
+      entries.add((name, color, lum > 160));
     }
-    final ordered = lines.toList()..sort();
+    entries.sort((a, b) => a.$1.compareTo(b.$1));
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Wrap(
         spacing: 8,
         runSpacing: 8,
         children: [
-          for (final l in ordered)
-            LineBadge(
-              label: l.replaceFirst('M', ''),
-              color: _lineColor(l),
-              darkText: l == 'M1' || l == 'M13',
-            ),
+          for (final (label, color, dark) in entries)
+            LineBadge(label: label, color: color, darkText: dark),
         ],
       ),
     );
+  }
+
+  double _luminance(String? hex) {
+    if (hex == null) return 0;
+    final c = int.tryParse(hex.padLeft(6, '0'), radix: 16) ?? 0;
+    return 0.299 * ((c >> 16) & 0xFF) +
+        0.587 * ((c >> 8) & 0xFF) +
+        0.114 * (c & 0xFF);
   }
 }
 
@@ -340,13 +364,17 @@ class _StationDot {
   const _StationDot({
     required this.name,
     required this.pos,
+    required this.showLabel,
     required this.isHub,
     required this.isRoot,
+    required this.color,
   });
   final String name;
   final LatLng pos;
+  final bool showLabel;
   final bool isHub;
   final bool isRoot;
+  final Color color;
 }
 
 class _StationMarker extends StatelessWidget {
@@ -355,41 +383,40 @@ class _StationMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = station.isRoot ? MedColors.accent : MedColors.text;
+    final dotColor = station.isRoot ? MedColors.accent : station.color;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: BoxDecoration(
-            color: MedColors.bg.withValues(alpha: 0.82),
-            borderRadius: BorderRadius.circular(6),
-            border:
-                Border.all(color: color.withValues(alpha: 0.5), width: 0.8),
-          ),
-          child: Text(
-            station.isRoot ? '${station.name} · racine' : station.name,
-            style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w700,
-              color: color,
+        if (station.showLabel)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: MedColors.bg.withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                  color: dotColor.withValues(alpha: 0.6), width: 0.8),
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+            child: Text(
+              station.isRoot ? '${station.name} · racine' : station.name,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                color: dotColor,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
-        ),
-        const SizedBox(height: 3),
+        if (station.showLabel) const SizedBox(height: 3),
         Container(
-          width: station.isHub ? 13 : 10,
-          height: station.isHub ? 13 : 10,
+          width: station.isRoot ? 14 : (station.isHub ? 11 : 7),
+          height: station.isRoot ? 14 : (station.isHub ? 11 : 7),
           decoration: BoxDecoration(
-            color: station.isRoot ? MedColors.accent : MedColors.surface,
+            color: dotColor,
             shape: BoxShape.circle,
             border: Border.all(
-              color: station.isRoot
-                  ? Colors.white
-                  : (station.isHub ? MedColors.accent : MedColors.secondary),
-              width: station.isHub ? 2.5 : 1.5,
+              color: Colors.white.withValues(alpha: 0.7),
+              width: station.isHub ? 2.0 : 1.0,
             ),
           ),
         ),

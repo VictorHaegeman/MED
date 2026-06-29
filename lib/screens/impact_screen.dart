@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../main.dart' show tripSavedNotifier;
+import '../main.dart' show appGraph, tripSavedNotifier;
 import '../models/saved_trip.dart';
 import '../services/co2_service.dart';
 import '../services/trip_storage.dart';
@@ -97,7 +97,9 @@ class _ImpactScreenState extends State<ImpactScreen> {
         ],
         MedCard(
           onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const NetworkTreeScreen()),
+            MaterialPageRoute(
+              builder: (_) => NetworkTreeScreen(graph: appGraph),
+            ),
           ),
           child: const Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
