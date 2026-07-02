@@ -68,7 +68,7 @@ class NetworkScreen extends StatelessWidget {
     final g = appGraph;
     final seen = <String>{};
 
-    // Collecte les infos uniques par lineShortName
+    // Collecte les infos uniques par lineShortName (tous modes pour les compteurs)
     final lines = <_LineInfo>[];
     for (final node in g.nodes.values) {
       final name = node.lineShortName;
@@ -82,17 +82,22 @@ class NetworkScreen extends StatelessWidget {
       ));
     }
 
-    // Tri : métro < RER < tram < bus, puis alphabétique
-    lines.sort((a, b) {
-      if (a.routeType != b.routeType) return a.routeType.compareTo(b.routeType);
-      return a.label.compareTo(b.label);
-    });
+    // Badges : réseau ferré uniquement (métro/tram/RER). Les ~350 lignes de
+    // bus seraient illisibles en badges — on affiche leur nombre.
+    final rail = lines.where((l) => l.routeType != 3).toList()
+      ..sort((a, b) {
+        if (a.routeType != b.routeType) {
+          return a.routeType.compareTo(b.routeType);
+        }
+        return a.label.compareTo(b.label);
+      });
+    final busCount = lines.where((l) => l.routeType == 3).length;
 
     return MedCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Lignes actives (${lines.length})',
+          Text('Lignes ferrées (${rail.length})',
               style: const TextStyle(
                   fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: 12),
@@ -100,7 +105,7 @@ class NetworkScreen extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final l in lines)
+              for (final l in rail)
                 LineBadge(
                   label: l.label,
                   color: l.color,
@@ -111,10 +116,10 @@ class NetworkScreen extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            '${lines.where((l) => l.routeType == 1).length} lignes de métro · '
-            '${lines.where((l) => l.routeType == 2).length} lignes RER/Transilien · '
-            '${lines.where((l) => l.routeType == 0).length} lignes de tram · '
-            '${lines.where((l) => l.routeType == 3).length} lignes de bus',
+            '${rail.where((l) => l.routeType == 1).length} métro · '
+            '${rail.where((l) => l.routeType == 2).length} RER/Transilien · '
+            '${rail.where((l) => l.routeType == 0).length} tram · '
+            '+ $busCount lignes de bus',
             style: const TextStyle(fontSize: 11, color: MedColors.secondary),
           ),
         ],

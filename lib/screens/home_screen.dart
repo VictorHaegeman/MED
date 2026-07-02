@@ -70,6 +70,10 @@ class _HomeScreenState extends State<HomeScreen> {
       .toList()
     ..sort();
 
+  // Version minuscule pré-calculée — évite 1842 toLowerCase() par frappe.
+  late final List<String> _stationNamesLower =
+      _stationNames.map((s) => s.toLowerCase()).toList();
+
   @override
   void dispose() {
     _fromCtrl.dispose();
@@ -119,11 +123,13 @@ class _HomeScreenState extends State<HomeScreen> {
   List<SearchResult> _stationMatches(String q) {
     if (q.trim().isEmpty) return [];
     final lower = q.toLowerCase();
-    return _stationNames
-        .where((s) => s.toLowerCase().contains(lower))
-        .take(5)
-        .map(SearchResult.station)
-        .toList();
+    final matches = <SearchResult>[];
+    for (int i = 0; i < _stationNames.length && matches.length < 5; i++) {
+      if (_stationNamesLower[i].contains(lower)) {
+        matches.add(SearchResult.station(_stationNames[i]));
+      }
+    }
+    return matches;
   }
 
   void _selectFrom(SearchResult r) {

@@ -65,28 +65,35 @@ class RouterService {
             fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
       }
     } else {
-      // --- Mode filtré : rapide + moins de correspondances dans ce mode ---
+      // --- Mode filtré : jusqu'à 3 chemins DISTINCTS en mode pur ---
       final filter = _filterForMode(g, modeFilter);
+      final paths = _distinctPaths(g, fromIds, toIds,
+          edgeFilter: filter, count: 3);
 
-      final r1 = _bestPath(g, fromIds, toIds, edgeFilter: filter);
-      if (r1 != null && r1.found) {
-        results.add(_toItinerary(g, r1,
-            tag: _tagForMode(modeFilter),
-            tagColor: _colorForMode(modeFilter),
-            highlighted: true,
-            from: from, to: to,
-            fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
-      }
-
-      final r2 = _bestPath(g, fromIds, toIds,
-          edgeFilter: filter, transferPenaltySecs: 420);
-      if (r2 != null && r2.found && !_isDuplicate(r2, results)) {
-        results.add(_toItinerary(g, r2,
-            tag: '${_tagForMode(modeFilter)} · DIRECT',
-            tagColor: _colorForMode(modeFilter),
-            highlighted: false,
-            from: from, to: to,
-            fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+      if (paths.isNotEmpty) {
+        final modeColor = _colorForMode(modeFilter);
+        const labels = ['LE PLUS RAPIDE', 'ALTERNATIVE 1', 'ALTERNATIVE 2'];
+        for (int i = 0; i < paths.length; i++) {
+          final prefix = _tagForMode(modeFilter);
+          results.add(_toItinerary(g, paths[i],
+              tag: '$prefix · ${labels[i]}',
+              tagColor: modeColor,
+              highlighted: i == 0,
+              from: from, to: to,
+              fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+        }
+      } else {
+        // --- Fallback : aucun trajet 100 % en mode pur ---
+        // On complète avec les autres moyens (itinéraire combiné).
+        final combined = _bestPath(g, fromIds, toIds);
+        if (combined != null && combined.found) {
+          results.add(_toItinerary(g, combined,
+              tag: 'COMBINÉ · ${_tagForMode(modeFilter)} SEUL IMPOSSIBLE',
+              tagColor: const Color(0xFFF59E0B),
+              highlighted: true,
+              from: from, to: to,
+              fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+        }
       }
     }
 
@@ -163,6 +170,8 @@ class RouterService {
     List<String> toIds, {
     bool Function(Edge)? edgeFilter,
     double transferPenaltySecs = 0,
+    Set<String>? penalizedEdges,
+    double edgePenaltySecs = 0,
   }) {
     final algo = AStar();
     ShortestPathResult? best;
@@ -170,13 +179,54 @@ class RouterService {
       for (final t in toIds) {
         final r = algo.run(g, f, t,
             edgeFilter: edgeFilter,
-            transferPenaltySecs: transferPenaltySecs);
+            transferPenaltySecs: transferPenaltySecs,
+            penalizedEdges: penalizedEdges,
+            edgePenaltySecs: edgePenaltySecs);
         if (r.found && (best == null || r.totalSeconds < best.totalSeconds)) {
           best = r;
         }
       }
     }
     return best;
+  }
+
+  /// Génère jusqu'à [count] chemins DISTINCTS via la méthode edge-penalty :
+  /// on pénalise les arêtes du chemin précédent pour forcer un détour.
+  List<ShortestPathResult> _distinctPaths(
+    TransportGraph g,
+    List<String> fromIds,
+    List<String> toIds, {
+    bool Function(Edge)? edgeFilter,
+    int count = 3,
+  }) {
+    final results = <ShortestPathResult>[];
+    final penalized = <String>{};
+    final seenKeys = <String>{};
+
+    for (int k = 0; k < count; k++) {
+      // 1er chemin : le plus rapide. Suivants : détour forcé (+300 s/arête).
+      final r = _bestPath(
+        g, fromIds, toIds,
+        edgeFilter: edgeFilter,
+        penalizedEdges: k == 0 ? null : penalized,
+        edgePenaltySecs: k == 0 ? 0 : 300,
+      );
+      if (r == null || !r.found) break;
+      final key = r.path.join('|');
+      if (!seenKeys.add(key)) break; // plus d'alternative distincte
+      // Écarte les alternatives peu compétitives (> 1,3× le plus rapide) :
+      // mieux vaut 1 seule option propre qu'un détour absurde.
+      if (results.isNotEmpty &&
+          r.totalSeconds > results.first.totalSeconds * 1.3) {
+        break;
+      }
+      results.add(r);
+      // Pénalise les arêtes de ce chemin pour l'itération suivante
+      for (int i = 0; i < r.path.length - 1; i++) {
+        penalized.add('${r.path[i]}|${r.path[i + 1]}');
+      }
+    }
+    return results;
   }
 
   /// Retourne true si [r] a le même chemin qu'un itinéraire déjà dans [list].
@@ -200,7 +250,7 @@ class RouterService {
     required double fromWalkSecs,
     required double toWalkSecs,
   }) {
-    final coreLeg = _buildLegs(g, result.path);
+    final coreLeg = _buildLegs(g, result.path, result.stepTypes);
     final legs = <Leg>[];
 
     if (from.isAddress && fromWalkSecs > 0) {
@@ -217,7 +267,10 @@ class RouterService {
 
     final modes = legs.whereType<RideLeg>().map((r) => r.mode).toSet();
     final totalSecs = result.totalSeconds + fromWalkSecs + toWalkSecs;
-    final transfers = result.transfers;
+    // Correspondances = nombre de trajets véhicule − 1 (basé sur les vrais
+    // RideLeg, pas sur les arêtes transfer qui modélisent la marche).
+    final rideCount = legs.whereType<RideLeg>().length;
+    final transfers = (rideCount - 1).clamp(0, 999);
     final mins = (totalSecs / 60).round();
     final durationLabel = mins >= 60
         ? '${mins ~/ 60} h ${(mins % 60).toString().padLeft(2, '0')}'
@@ -226,7 +279,7 @@ class RouterService {
     final walkMin = ((fromWalkSecs + toWalkSecs) / 60).round();
 
     // CO₂ réel calculé par trajet (source : transilien.com/calcul-emissions-co2)
-    final co2 = Co2Service.forPath(g, result.path);
+    final co2 = Co2Service.forPath(g, result.path, result.stepTypes);
     final co2Label = co2.savedKg >= 1
         ? '−${co2.savedKg.toStringAsFixed(2)} kg CO₂'
         : '−${(co2.savedKg * 1000).toStringAsFixed(0)} g CO₂';
@@ -257,59 +310,125 @@ class RouterService {
   // Legs
   // ---------------------------------------------------------------------------
 
-  List<Leg> _buildLegs(TransportGraph g, List<String> path) {
-    if (path.isEmpty) return [];
+  /// Construit les segments d'itinéraire en s'appuyant sur le TYPE d'arête
+  /// réel (ride = trajet véhicule → badge de ligne ; transfer = marche/
+  /// correspondance → segment à pied). Indispensable car le graphe modélise
+  /// la marche par ~493 000 arêtes `transfer` : sans ça, deux arrêts reliés
+  /// à pied seraient affichés comme un faux trajet en bus.
+  List<Leg> _buildLegs(
+      TransportGraph g, List<String> path, List<EdgeType> stepTypes) {
+    if (path.length < 2) {
+      final n = path.isNotEmpty ? g.nodes[path.first] : null;
+      return n == null
+          ? const []
+          : [
+              StationPoint(
+                  name: n.stationName,
+                  subtitle: 'Départ',
+                  color: _colorFromHex(n.lineColor))
+            ];
+    }
+
+    // Filet de sécurité si l'algo n'a pas fourni les types d'arête.
+    if (stepTypes.length != path.length - 1) {
+      stepTypes = [
+        for (int i = 0; i < path.length - 1; i++)
+          _edgeBetween(g, path[i], path[i + 1])?.type ?? EdgeType.transfer
+      ];
+    }
+
     final legs = <Leg>[];
-    final firstNode = g.nodes[path.first]!;
+    final first = g.nodes[path.first]!;
     legs.add(StationPoint(
-        name: firstNode.stationName,
+        name: first.stationName,
         subtitle: 'Départ',
-        color: _colorFromHex(firstNode.lineColor)));
+        color: _colorFromHex(first.lineColor)));
 
-    int segStart = 0;
-    for (int i = 1; i <= path.length; i++) {
-      final prevNode = g.nodes[path[i - 1]];
-      if (prevNode == null) continue;
-      final nextLine = i < path.length ? g.nodes[path[i]]?.line : null;
-      if (i == path.length || nextLine != prevNode.line) {
-        final segNodes = path
-            .sublist(segStart, i)
-            .map((id) => g.nodes[id])
-            .whereType<GraphNode>()
-            .toList();
-        final stops = segNodes.map((n) => n.stationName).toSet().length;
-        final stopCount = stops > 1 ? stops - 1 : 1;
-
+    int i = 0;
+    while (i < stepTypes.length) {
+      if (stepTypes[i] == EdgeType.ride) {
+        // --- Trajet véhicule : on regroupe les pas ride de même ligne ---
+        final rideNode = g.nodes[path[i]]!;
+        final line = rideNode.line;
+        final start = i;
+        while (i < stepTypes.length &&
+            stepTypes[i] == EdgeType.ride &&
+            g.nodes[path[i]]?.line == line) {
+          i++;
+        }
+        final stops = path
+            .sublist(start, i + 1)
+            .map((id) => g.nodes[id]?.stationName)
+            .whereType<String>()
+            .toSet()
+            .length;
+        final stopCount = (stops - 1).clamp(1, 999);
         legs.add(RideLeg(
-          mode: _modeFromRouteType(prevNode.routeType),
-          lineLabel: prevNode.lineShortName ?? '?',
-          lineColor: _colorFromHex(prevNode.lineColor),
-          darkText: _isDarkText(prevNode.lineColor),
-          direction: _headsignFor(g, path, segStart),
+          mode: _modeFromRouteType(rideNode.routeType),
+          lineLabel: rideNode.lineShortName ?? '?',
+          lineColor: _colorFromHex(rideNode.lineColor),
+          darkText: _isDarkText(rideNode.lineColor),
+          direction: _headsignFor(g, path, start),
           subtitle: '$stopCount arrêt${stopCount > 1 ? 's' : ''}',
         ));
-
-        if (i < path.length) {
-          final nextNode = g.nodes[path[i]]!;
+        if (i < stepTypes.length) {
+          final atNode = g.nodes[path[i]]!;
           legs.add(StationPoint(
-            name: prevNode.stationName,
-            subtitle: prevNode.stationName == nextNode.stationName
-                ? 'Correspondance'
-                : 'Arrivée',
-            color: _colorFromHex(prevNode.lineColor),
-          ));
-          segStart = i;
+              name: atNode.stationName,
+              subtitle: 'Correspondance',
+              color: _colorFromHex(atNode.lineColor)));
+        }
+      } else {
+        // --- Marche / correspondance : on cumule les pas non-ride ---
+        final start = i;
+        double secs = 0;
+        while (i < stepTypes.length && stepTypes[i] != EdgeType.ride) {
+          secs += _edgeWeightOfType(g, path[i], path[i + 1], stepTypes[i]);
+          i++;
+        }
+        final fromN = g.nodes[path[start]]!;
+        final toN = g.nodes[path[i]]!;
+        // Marche visible uniquement si on change réellement de lieu.
+        // Un simple changement de quai (même station) reste implicite.
+        if (fromN.stationName != toN.stationName) {
+          final mins = (secs / 60).ceil().clamp(1, 999);
+          legs.add(WalkLeg(
+              label: '$mins min à pied', subtitle: 'Vers ${toN.stationName}'));
+          if (i < stepTypes.length) {
+            legs.add(StationPoint(
+                name: toN.stationName,
+                subtitle: 'Correspondance',
+                color: _colorFromHex(toN.lineColor)));
+          }
         }
       }
     }
 
-    final lastNode = g.nodes[path.last]!;
+    final last = g.nodes[path.last]!;
     legs.add(StationPoint(
-        name: lastNode.stationName,
+        name: last.stationName,
         subtitle: 'Arrivée',
-        color: _colorFromHex(lastNode.lineColor)));
+        color: _colorFromHex(last.lineColor)));
 
     return legs;
+  }
+
+  /// Retourne l'arête reliant [from] à [to] (ou null).
+  Edge? _edgeBetween(TransportGraph g, String from, String to) {
+    for (final e in g.neighbors(from)) {
+      if (e.to == to) return e;
+    }
+    return null;
+  }
+
+  /// Poids de l'arête [from]→[to] du type [type] (celle empruntée par A*).
+  double _edgeWeightOfType(
+      TransportGraph g, String from, String to, EdgeType type) {
+    for (final e in g.neighbors(from)) {
+      if (e.to == to && e.type == type) return e.weightSeconds;
+    }
+    // Repli : n'importe quelle arête vers [to]
+    return _edgeBetween(g, from, to)?.weightSeconds ?? 0;
   }
 
   // ---------------------------------------------------------------------------

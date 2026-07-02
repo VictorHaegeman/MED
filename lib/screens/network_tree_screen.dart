@@ -42,7 +42,8 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
   late final Duration _computeTime;
 
   final List<_RideSegment> _segments = [];
-  final List<_StationDot> _stations = [];
+  final List<_StationDot> _stations = []; // pôles + racine (avec label)
+  final List<CircleMarker> _plainCircles = []; // stations simples (canvas)
   String _rootStation = '';
 
   @override
@@ -94,15 +95,27 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
     for (final entry in coordPerStation.entries) {
       final isHub = (linesPerStation[entry.key]?.length ?? 0) > 1;
       final isRoot = entry.key == _rootStation;
-      _stations.add(_StationDot(
-        name: entry.key,
-        pos: entry.value,
-        // N'afficher le label que pour les pôles et la racine
-        showLabel: isHub || isRoot,
-        isHub: isHub,
-        isRoot: isRoot,
-        color: colorPerStation[entry.key] ?? MedColors.secondary,
-      ));
+      final color = colorPerStation[entry.key] ?? MedColors.secondary;
+      if (isHub || isRoot) {
+        // Pôles & racine → marqueur widget avec label
+        _stations.add(_StationDot(
+          name: entry.key,
+          pos: entry.value,
+          showLabel: true,
+          isHub: isHub,
+          isRoot: isRoot,
+          color: color,
+        ));
+      } else {
+        // Stations simples → cercle canvas (léger, ~1800 points)
+        _plainCircles.add(CircleMarker(
+          point: entry.value,
+          radius: 2.4,
+          color: color,
+          borderColor: Colors.white.withValues(alpha: 0.35),
+          borderStrokeWidth: 0.5,
+        ));
+      }
     }
   }
 
@@ -162,14 +175,16 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
               ),
           ],
         ),
-        // Stations
+        // Stations simples → cercles canvas (rapide)
+        CircleLayer(circles: _plainCircles),
+        // Pôles d'échange & racine → marqueurs avec label
         MarkerLayer(
           markers: [
             for (final st in _stations)
               Marker(
                 point: st.pos,
-                width: st.showLabel ? 130 : 14,
-                height: st.showLabel ? 48 : 14,
+                width: 130,
+                height: 48,
                 alignment: Alignment.bottomCenter,
                 child: _StationMarker(station: st),
               ),
@@ -326,23 +341,6 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
 // ---------------------------------------------------------------------------
 //  Helpers de rendu
 // ---------------------------------------------------------------------------
-
-Color _lineColor(String? line) {
-  switch (line) {
-    case 'M1':
-      return MedColors.m1;
-    case 'M4':
-      return MedColors.m4;
-    case 'M12':
-      return MedColors.m12;
-    case 'M13':
-      return MedColors.m13;
-    case 'M14':
-      return MedColors.m14;
-    default:
-      return MedColors.secondary;
-  }
-}
 
 String _fmtSeconds(double s) {
   final total = s.round();

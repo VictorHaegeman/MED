@@ -148,12 +148,30 @@ class _MapViewState extends State<_MapView> {
   }
 
   // -------------------------------------------------------------------------
-  // Stations clés
+  // Données de rendu — mémoïsées pour ne pas reparcourir le graphe à chaque
+  // rebuild (les 4 ValueListenableBuilder imbriqués rebuild souvent).
   // -------------------------------------------------------------------------
 
-  Set<String> get _keyNodeIds {
-    final ids = widget.pathNodeIds;
-    if (ids == null || ids.isEmpty) return {};
+  List<String>? _dataForPath; // identité du chemin ayant produit le cache
+  bool _dataComputed = false;
+  List<_Station> _stations = [];
+  List<_Segment> _segments = [];
+  List<List<LatLng>> _walkLines = [];
+  LatLng _center = const LatLng(48.8566, 2.3522);
+
+  /// Recalcule les primitives de rendu uniquement si le chemin a changé.
+  void _ensureRenderData() {
+    if (_dataComputed && identical(_dataForPath, widget.pathNodeIds)) return;
+    _dataComputed = true;
+    _dataForPath = widget.pathNodeIds;
+    _stations = _computeStations();
+    _segments = _computeSegments();
+    _walkLines = _computeWalkPolylines();
+    _center = _computeCenter();
+  }
+
+  Set<String> _keyNodeIds(List<String> ids) {
+    if (ids.isEmpty) return {};
     final g = appGraph;
     final keys = <String>{ids.first, ids.last};
     for (int i = 1; i < ids.length - 1; i++) {
@@ -165,41 +183,31 @@ class _MapViewState extends State<_MapView> {
     return keys;
   }
 
-  List<_Station> get _stations {
+  /// En mode trajet uniquement : stations du chemin (labels + dots).
+  /// Le mode réseau (1842 stations) passe par _networkCircles (CircleLayer).
+  List<_Station> _computeStations() {
+    if (!_hasPath) return const [];
     final g = appGraph;
-    if (_hasPath) {
-      final ids = widget.pathNodeIds!;
-      final keys = _keyNodeIds;
-      final seen = <String>{};
-      final result = <_Station>[];
-      for (int i = 0; i < ids.length; i++) {
-        final node = g.nodes[ids[i]];
-        if (node == null || !seen.add(node.stationName)) continue;
-        result.add(_Station(
-          name: node.stationName,
-          lat: node.lat,
-          lng: node.lon,
-          color: _colorFromHex(node.lineColor),
-          isKey: keys.contains(ids[i]),
-        ));
-      }
-      return result;
-    }
+    final ids = widget.pathNodeIds!;
+    final keys = _keyNodeIds(ids);
     final seen = <String>{};
-    return g.nodes.values
-        .where((n) => seen.add(n.stationName))
-        .map((n) => _Station(
-              name: n.stationName,
-              lat: n.lat,
-              lng: n.lon,
-              color: _colorFromHex(n.lineColor),
-              isKey: false,
-            ))
-        .toList();
+    final result = <_Station>[];
+    for (int i = 0; i < ids.length; i++) {
+      final node = g.nodes[ids[i]];
+      if (node == null || !seen.add(node.stationName)) continue;
+      result.add(_Station(
+        name: node.stationName,
+        lat: node.lat,
+        lng: node.lon,
+        color: _colorFromHex(node.lineColor),
+        isKey: keys.contains(ids[i]),
+      ));
+    }
+    return result;
   }
 
-  List<_Segment> get _segments {
-    if (!_hasPath) return [];
+  List<_Segment> _computeSegments() {
+    if (!_hasPath) return const [];
     final g = appGraph;
     final result = <_Segment>[];
     final ids = widget.pathNodeIds!;
@@ -218,14 +226,16 @@ class _MapViewState extends State<_MapView> {
             .whereType<GraphNode>()
             .map((n) => LatLng(n.lat, n.lon))
             .toList();
-        if (pts.length >= 2) result.add(_Segment(_colorFromHex(prev.lineColor), pts));
+        if (pts.length >= 2) {
+          result.add(_Segment(_colorFromHex(prev.lineColor), pts));
+        }
         segStart = i;
       }
     }
     return result;
   }
 
-  LatLng get _center {
+  LatLng _computeCenter() {
     if (_hasPath) {
       final g = appGraph;
       final nodes = widget.pathNodeIds!
@@ -233,12 +243,46 @@ class _MapViewState extends State<_MapView> {
           .whereType<GraphNode>()
           .toList();
       if (nodes.isNotEmpty) {
-        final lat = nodes.map((n) => n.lat).reduce((a, b) => a + b) / nodes.length;
-        final lon = nodes.map((n) => n.lon).reduce((a, b) => a + b) / nodes.length;
+        final lat =
+            nodes.map((n) => n.lat).reduce((a, b) => a + b) / nodes.length;
+        final lon =
+            nodes.map((n) => n.lon).reduce((a, b) => a + b) / nodes.length;
         return LatLng(lat, lon);
       }
     }
     return const LatLng(48.8566, 2.3522);
+  }
+
+  // -------------------------------------------------------------------------
+  // Vue réseau : cercles canvas (CircleLayer) — 1 seul calcul, pas de widgets.
+  // Partagé et calculé une fois (le graphe complet ne change jamais).
+  // -------------------------------------------------------------------------
+
+  static List<CircleMarker>? _networkCirclesCache;
+
+  List<CircleMarker> get _networkCircles {
+    return _networkCirclesCache ??= _buildNetworkCircles();
+  }
+
+  List<CircleMarker> _buildNetworkCircles() {
+    final g = appGraph;
+    final seen = <String>{};
+    final circles = <CircleMarker>[];
+    for (final n in g.nodes.values) {
+      // Aperçu réseau : réseau ferré uniquement (métro/tram/RER).
+      // Les ~41 700 arrêts de bus surchargent la carte — ils restent
+      // visibles dans le détail d'un trajet qui les emprunte.
+      if (n.routeType == 3) continue;
+      if (!seen.add(n.stationName)) continue;
+      circles.add(CircleMarker(
+        point: LatLng(n.lat, n.lon),
+        radius: 2.6,
+        color: _colorFromHex(n.lineColor),
+        borderColor: Colors.white.withValues(alpha: 0.35),
+        borderStrokeWidth: 0.5,
+      ));
+    }
+    return circles;
   }
 
   Color _colorFromHex(String? hex) {
@@ -258,8 +302,8 @@ class _MapViewState extends State<_MapView> {
     return _fmt(now.add(Duration(minutes: 1, seconds: 60 - now.second)));
   }
 
-  List<List<LatLng>> get _walkPolylines {
-    if (!_hasPath) return [];
+  List<List<LatLng>> _computeWalkPolylines() {
+    if (!_hasPath) return const [];
     final g = appGraph;
     final ids = widget.pathNodeIds!;
     final result = <List<LatLng>>[];
@@ -286,9 +330,10 @@ class _MapViewState extends State<_MapView> {
 
   @override
   Widget build(BuildContext context) {
+    _ensureRenderData();
     final segs = _segments;
     final stations = _stations;
-    final walkLines = _walkPolylines;
+    final walkLines = _walkLines;
     final hasBack = widget.showDeparturePanel;
 
     return Scaffold(
@@ -361,22 +406,27 @@ class _MapViewState extends State<_MapView> {
                       ),
                   ],
                 ),
-              MarkerLayer(
-                markers: [
-                  for (final s in stations)
-                    Marker(
-                      point: LatLng(s.lat, s.lng),
-                      width: s.isKey ? 140 : 12,
-                      height: s.isKey ? 52 : 12,
-                      alignment: s.isKey
-                          ? Alignment.bottomCenter
-                          : Alignment.center,
-                      child: s.isKey
-                          ? _StationLabel(name: s.name, color: s.color)
-                          : _StationDot(color: s.color),
-                    ),
-                ],
-              ),
+              // Mode réseau : cercles canvas (rapide, ~1842 points).
+              // Mode trajet : marqueurs widgets (peu nombreux, stylés).
+              if (!_hasPath)
+                CircleLayer(circles: _networkCircles)
+              else
+                MarkerLayer(
+                  markers: [
+                    for (final s in stations)
+                      Marker(
+                        point: LatLng(s.lat, s.lng),
+                        width: s.isKey ? 140 : 12,
+                        height: s.isKey ? 52 : 12,
+                        alignment: s.isKey
+                            ? Alignment.bottomCenter
+                            : Alignment.center,
+                        child: s.isKey
+                            ? _StationLabel(name: s.name, color: s.color)
+                            : _StationDot(color: s.color),
+                      ),
+                  ],
+                ),
             ],
           ),
 

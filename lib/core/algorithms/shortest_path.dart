@@ -20,6 +20,7 @@ class ShortestPathResult {
     required this.totalSeconds,
     required this.exploredNodes,
     required this.computeTime,
+    this.stepTypes = const [],
   });
 
   // Suite ordonnée d'identifiants de nœuds, départ → arrivée.
@@ -27,6 +28,11 @@ class ShortestPathResult {
   final double totalSeconds;
   final int exploredNodes;
   final Duration computeTime;
+
+  // Type de l'arête RÉELLEMENT empruntée à chaque pas (path[i] → path[i+1]).
+  // Longueur = path.length - 1. Indispensable pour distinguer un trajet
+  // véhicule (ride) d'une marche (transfer) quand les deux arêtes coexistent.
+  final List<EdgeType> stepTypes;
 
   // Nombre de correspondances (changement de ligne sur la même station).
   int get transfers {
@@ -64,6 +70,8 @@ abstract interface class ShortestPathAlgorithm {
     String toId, {
     bool Function(Edge)? edgeFilter,
     double transferPenaltySecs = 0,
+    Set<String>? penalizedEdges,
+    double edgePenaltySecs = 0,
   });
 }
 
@@ -158,6 +166,8 @@ class Dijkstra implements ShortestPathAlgorithm {
     String toId, {
     bool Function(Edge)? edgeFilter,
     double transferPenaltySecs = 0,
+    Set<String>? penalizedEdges,
+    double edgePenaltySecs = 0,
   }) {
     final stopwatch = Stopwatch()..start();
 
@@ -276,6 +286,8 @@ class AStar implements ShortestPathAlgorithm {
     String toId, {
     bool Function(Edge)? edgeFilter,
     double transferPenaltySecs = 0,
+    Set<String>? penalizedEdges,
+    double edgePenaltySecs = 0,
   }) {
     final stopwatch = Stopwatch()..start();
 
@@ -302,13 +314,11 @@ class AStar implements ShortestPathAlgorithm {
 
     final targetNode = graph.nodes[toId]!;
 
-    // g(n) = coût réel depuis la source
+    // g(n) = coût réel depuis la source. Cartes lazy (pas de pré-remplissage
+    // sur les ~43 000 nœuds — l'absence de clé vaut +∞), crucial pour la perf.
     final gScore = <String, double>{};
     final prev = <String, String?>{};
-    for (final id in graph.nodes.keys) {
-      gScore[id] = double.infinity;
-      prev[id] = null;
-    }
+    final prevEdgeType = <String, EdgeType>{}; // arête empruntée pour atteindre v
     gScore[fromId] = 0;
 
     // File de priorité sur f(n) = g(n) + h(n)
@@ -334,10 +344,18 @@ class AStar implements ShortestPathAlgorithm {
             transferPenaltySecs > 0 && edge.type == EdgeType.transfer
                 ? transferPenaltySecs
                 : 0.0;
-        final tentativeG = gU + edge.weightSeconds + penalty;
+        // Pénalité d'arête : force un détour pour générer des itinéraires
+        // alternatifs distincts (approche "plateau"/edge-penalty).
+        final edgePen = (edgePenaltySecs > 0 &&
+                penalizedEdges != null &&
+                penalizedEdges.contains('$u|$v'))
+            ? edgePenaltySecs
+            : 0.0;
+        final tentativeG = gU + edge.weightSeconds + penalty + edgePen;
         if (tentativeG < (gScore[v] ?? double.infinity)) {
           gScore[v] = tentativeG;
           prev[v] = u;
+          prevEdgeType[v] = edge.type;
           final vNode = graph.nodes[v];
           final h = vNode != null ? _heuristic(vNode, targetNode) : 0.0;
           heap.add(_Entry(v, tentativeG + h));
@@ -350,11 +368,18 @@ class AStar implements ShortestPathAlgorithm {
     final path = _reconstructPath(prev, fromId, toId);
     final total = gScore[toId] ?? double.infinity;
 
+    // Type d'arête réellement empruntée pour chaque pas du chemin.
+    final stepTypes = <EdgeType>[];
+    for (int i = 0; i + 1 < path.length; i++) {
+      stepTypes.add(prevEdgeType[path[i + 1]] ?? EdgeType.transfer);
+    }
+
     return ShortestPathResult(
       path: path,
       totalSeconds: total.isInfinite ? 0 : total,
       exploredNodes: explored,
       computeTime: stopwatch.elapsed,
+      stepTypes: stepTypes,
     );
   }
 }

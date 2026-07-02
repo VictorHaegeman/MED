@@ -15,24 +15,35 @@ class Co2Service {
     3: 68.0,  // Bus RATP
   };
 
-  static Co2Result forPath(TransportGraph g, List<String> path) {
+  /// [stepTypes] : type d'arête réel par pas (ride/transfer). Les pas de
+  /// marche (transfer) ne comptent aucune émission mais comptent dans la
+  /// distance « économisée » vs voiture.
+  static Co2Result forPath(
+    TransportGraph g,
+    List<String> path, [
+    List<EdgeType> stepTypes = const [],
+  ]) {
     if (path.length < 2) return const Co2Result(distanceKm: 0, savedKg: 0);
 
-    double distKm = 0;
+    double rideKm = 0; // distance en véhicule (compte pour émissions + éco)
     double emitG = 0;
 
     for (int i = 0; i < path.length - 1; i++) {
       final a = g.nodes[path[i]];
       final b = g.nodes[path[i + 1]];
       if (a == null || b == null) continue;
+      // Seuls les vrais trajets véhicule émettent et sont comparés à la voiture.
+      final isRide =
+          i < stepTypes.length ? stepTypes[i] == EdgeType.ride : true;
+      if (!isRide) continue;
       final d = _haversineKm(a.lat, a.lon, b.lat, b.lon);
-      distKm += d;
+      rideKm += d;
       emitG += (_emissionsGPerKm[a.routeType] ?? 0.0) * d;
     }
 
-    final carG = voitureGPerKm * distKm;
+    final carG = voitureGPerKm * rideKm;
     return Co2Result(
-      distanceKm: distKm,
+      distanceKm: rideKm,
       savedKg: (carG - emitG).clamp(0.0, double.infinity) / 1000,
     );
   }

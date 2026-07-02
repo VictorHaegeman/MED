@@ -102,6 +102,23 @@ class TransportGraph {
       ));
     }
 
+    // Plafond de correspondance à pied : au-delà, ce n'est plus une
+    // correspondance réaliste (le JSON contient des "transferts" jusqu'à 60 min).
+    // Élaguer allège aussi fortement le graphe (~493 000 arêtes transfer).
+    const maxTransferSecs = 360.0; // 6 min de marche
+
+    // Lignes Noctilien (bus de nuit) : identifiées par lineShortName "N…" sur
+    // du bus (routeType 3). L'app fonctionne en « départ maintenant » sans
+    // modèle horaire → on ne doit pas proposer de rouler en bus de nuit.
+    bool isNoctilien(String? nodeId) {
+      final n = nodeId != null ? graph.nodes[nodeId] : null;
+      final name = n?.lineShortName;
+      return n?.routeType == 3 &&
+          name != null &&
+          name.isNotEmpty &&
+          (name[0] == 'N' || name[0] == 'n');
+    }
+
     // Garde le meilleur arc par triple (from, to, type) — filet de sécurité
     // contre les doublons résiduels dans le JSON.
     final best = <String, Edge>{};
@@ -111,6 +128,11 @@ class TransportGraph {
       final to = m['to'] as String;
       final type = EdgeType.values.byName(m['type'] as String);
       final w = (m['weightSeconds'] as num).toDouble();
+      // Élague les correspondances à pied trop longues.
+      if (type == EdgeType.transfer && w > maxTransferSecs) continue;
+      // Interdit de ROULER en bus de nuit (les correspondances vers ces arrêts
+      // restent autorisées, mais pas les trajets ride Noctilien).
+      if (type == EdgeType.ride && isNoctilien(from)) continue;
       final key = '$from|$to|${type.name}';
       final ex = best[key];
       if (ex == null || w < ex.weightSeconds) {
