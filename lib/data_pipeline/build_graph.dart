@@ -8,7 +8,7 @@ import '../core/graph.dart';
 const String gtfsDir = 'assets/data';
 const String outputPath = 'assets/graph/idfm_graph.json';
 const int defaultTransferSeconds = 240; //4 minutes
-const Set<int> allowedRouteTypes = {0, 1, 2, 3}; // 0=tram, 1=métro, 2=RER, 3=bus
+const Set<int> allowedRouteTypes = {0, 1, 2}; // 0=tram, 1=métro, 2=RER
 
 List<String> splitTxtLine(String line) {
   final result = <String>[];
