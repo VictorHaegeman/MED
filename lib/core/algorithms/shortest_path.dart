@@ -82,7 +82,12 @@ abstract interface class ShortestPathAlgorithm {
 class _Entry {
   final String nodeId;
   final double dist;
-  const _Entry(this.nodeId, this.dist);
+  // État « à bord » (TransitRouter) : true si le nœud a été atteint via une
+  // arête ride — rester dans le véhicule ne coûte pas d'attente.
+  final bool onboard;
+  // Coût réel g (TransitRouter) : dist porte f = g + h, g sert au lazy delete.
+  final double g;
+  const _Entry(this.nodeId, this.dist, {this.onboard = false, this.g = 0});
 }
 
 class _MinHeap {
@@ -253,9 +258,12 @@ class Dijkstra implements ShortestPathAlgorithm {
 // -------------------------------------------------------------------------
 
 class AStar implements ShortestPathAlgorithm {
-  // Vitesse max du réseau en m/s (métro ≈ 70 km/h en pointe).
-  // Hypothèse documentée — voir §1.3 du plan projet.
-  static const double maxSpeedMs = 19.4;
+  // Vitesse max du réseau en m/s — partagée avec le plancher de vitesse
+  // appliqué aux arêtes au chargement (TransportGraph.maxSpeedMs), ce qui
+  // garantit h(n) ≤ coût réel pour TOUTE arête. L'ancienne valeur (19,4 m/s
+  // ≈ 70 km/h) était dépassée par 863 arêtes réelles (RER/Transilien jusqu'à
+  // 112 km/h) → heuristique inadmissible → chemins sous-optimaux.
+  static const double maxSpeedMs = TransportGraph.maxSpeedMs;
 
   @override
   String get name => 'A* (heuristique géodésique)';
@@ -380,6 +388,201 @@ class AStar implements ShortestPathAlgorithm {
       exploredNodes: explored,
       computeTime: stopwatch.elapsed,
       stepTypes: stepTypes,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  TransitRouter — A* multi-source / multi-cible avec état « à bord »
+//
+//  Une requête utilisateur = UN SEUL passage A*, quel que soit le nombre de
+//  nœuds de départ/arrivée (l'ancien code lançait un A* par PAIRE de nœuds :
+//  jusqu'à des centaines de milliers de runs pour des arrêts très dupliqués).
+//
+//  Modélise aussi l'attente d'embarquement (demi-intervalle de passage) :
+//  monter dans un véhicule coûte du temps d'attente, rester à bord non.
+//  État = (nœud, à bord ?) — 2 labels par nœud, optimalité conservée.
+// ---------------------------------------------------------------------------
+
+/// Attente moyenne d'embarquement par routeType (≈ demi-intervalle de
+/// passage en journée) : 0=tram, 1=métro, 2=RER/Transilien, 3=bus.
+/// C'est ce qui rend les durées réalistes : sans elle, enchaîner 4 bus
+/// paraît « gratuit » et bat systématiquement le métro direct.
+const Map<int, double> kBoardingWaitSecs = {
+  0: 210, // tram — passage ~7 min
+  1: 120, // métro — passage ~4 min
+  2: 240, // RER/Transilien — passage ~8 min
+  3: 360, // bus — passage ~12 min
+};
+const double kDefaultBoardingWaitSecs = 240;
+
+class TransitRouter {
+  /// [sources] : nœud de départ → coût initial (marche d'approche, s).
+  /// [targets] : nœud d'arrivée → coût final (marche de sortie, s).
+  /// [maxCostSecs] : abandon anticipé si aucune solution sous ce budget —
+  /// évite d'explorer tout le graphe pour une alternative qu'on rejettera.
+  /// Le résultat inclut ces coûts et les attentes d'embarquement.
+  ShortestPathResult route(
+    TransportGraph graph, {
+    required Map<String, double> sources,
+    required Map<String, double> targets,
+    bool Function(Edge)? edgeFilter,
+    double transferPenaltySecs = 0,
+    Set<String>? penalizedEdges,
+    double edgePenaltySecs = 0,
+    bool boardingWaits = true,
+    double maxCostSecs = double.infinity,
+  }) {
+    final stopwatch = Stopwatch()..start();
+
+    ShortestPathResult empty() {
+      stopwatch.stop();
+      return ShortestPathResult(
+        path: const [],
+        totalSeconds: 0,
+        exploredNodes: 0,
+        computeTime: stopwatch.elapsed,
+      );
+    }
+
+    final srcs = <String, double>{
+      for (final e in sources.entries)
+        if (graph.nodes.containsKey(e.key)) e.key: e.value
+    };
+    final tgts = <String, double>{
+      for (final e in targets.entries)
+        if (graph.nodes.containsKey(e.key)) e.key: e.value
+    };
+    if (srcs.isEmpty || tgts.isEmpty) return empty();
+
+    // --- Heuristique multi-cible admissible ---
+    // h(n) = max(0, d(n, centroïde_cibles) − rayon) / vitesse_max.
+    // Minorant de d(n, cible) pour toute cible (inégalité triangulaire),
+    // et le plancher de vitesse du graphe garantit h ≤ coût réel.
+    double cLat = 0, cLon = 0;
+    for (final id in tgts.keys) {
+      final n = graph.nodes[id]!;
+      cLat += n.lat;
+      cLon += n.lon;
+    }
+    cLat /= tgts.length;
+    cLon /= tgts.length;
+    double radiusM = 0;
+    for (final id in tgts.keys) {
+      final n = graph.nodes[id]!;
+      final d = AStar._haversine(cLat, cLon, n.lat, n.lon);
+      if (d > radiusM) radiusM = d;
+    }
+    double h(GraphNode n) {
+      final d = AStar._haversine(n.lat, n.lon, cLat, cLon) - radiusM;
+      return d > 0 ? d / TransportGraph.maxSpeedMs : 0;
+    }
+
+    // --- 2 labels par nœud : atteint à pied / atteint à bord ---
+    final gWalk = <String, double>{};
+    final gRide = <String, double>{};
+    // prev[état] = (nœud précédent, état précédent à bord ?, type d'arête)
+    final prevWalk = <String, (String, bool, EdgeType)>{};
+    final prevRide = <String, (String, bool, EdgeType)>{};
+
+    final heap = _MinHeap();
+
+    double bestFinal = double.infinity;
+    String? bestNode;
+    bool bestOnboard = false;
+
+    void considerTarget(String id, bool onboard, double g) {
+      final extra = tgts[id];
+      if (extra != null && g + extra < bestFinal) {
+        bestFinal = g + extra;
+        bestNode = id;
+        bestOnboard = onboard;
+      }
+    }
+
+    for (final e in srcs.entries) {
+      final existing = gWalk[e.key];
+      if (existing != null && existing <= e.value) continue;
+      gWalk[e.key] = e.value;
+      heap.add(_Entry(e.key, e.value + h(graph.nodes[e.key]!),
+          onboard: false, g: e.value));
+      considerTarget(e.key, false, e.value);
+    }
+
+    int explored = 0;
+    while (heap.isNotEmpty) {
+      final entry = heap.removeFirst();
+      // f = g + h est un minorant du coût final de toute solution passant
+      // par cette entrée : si f ≥ meilleure solution connue (ou dépasse le
+      // budget), terminé.
+      if (entry.dist >= bestFinal || entry.dist > maxCostSecs) break;
+      final u = entry.nodeId;
+      final uOnboard = entry.onboard;
+      final gU = uOnboard ? gRide[u] : gWalk[u];
+      if (gU == null || entry.g > gU) continue; // entrée périmée
+      explored++;
+
+      for (final edge in graph.neighbors(u)) {
+        if (edgeFilter != null && !edgeFilter(edge)) continue;
+        double w = edge.weightSeconds;
+        final bool vOnboard;
+        if (edge.type == EdgeType.ride) {
+          vOnboard = true;
+          // Embarquement : on n'était pas à bord → attente du véhicule.
+          if (boardingWaits && !uOnboard) {
+            w += kBoardingWaitSecs[graph.nodes[u]?.routeType] ??
+                kDefaultBoardingWaitSecs;
+          }
+        } else {
+          vOnboard = false;
+          if (transferPenaltySecs > 0 && edge.type == EdgeType.transfer) {
+            w += transferPenaltySecs;
+          }
+        }
+        if (edgePenaltySecs > 0 &&
+            penalizedEdges != null &&
+            penalizedEdges.contains('$u|${edge.to}')) {
+          w += edgePenaltySecs;
+        }
+        final v = edge.to;
+        final gV = gU + w;
+        final gMap = vOnboard ? gRide : gWalk;
+        if (gV < (gMap[v] ?? double.infinity)) {
+          gMap[v] = gV;
+          (vOnboard ? prevRide : prevWalk)[v] = (u, uOnboard, edge.type);
+          final vNode = graph.nodes[v];
+          final f = gV + (vNode != null ? h(vNode) : 0.0);
+          if (f < bestFinal) {
+            heap.add(_Entry(v, f, onboard: vOnboard, g: gV));
+          }
+          considerTarget(v, vOnboard, gV);
+        }
+      }
+    }
+
+    stopwatch.stop();
+    if (bestNode == null || bestFinal > maxCostSecs) return empty();
+
+    // --- Reconstruction : chaîne d'états → chemin + types d'arête ---
+    final path = <String>[bestNode!];
+    final stepTypes = <EdgeType>[];
+    var cur = bestNode!;
+    var curOnboard = bestOnboard;
+    while (true) {
+      final p = (curOnboard ? prevRide : prevWalk)[cur];
+      if (p == null) break; // remonté jusqu'à une source
+      path.add(p.$1);
+      stepTypes.add(p.$3);
+      cur = p.$1;
+      curOnboard = p.$2;
+    }
+
+    return ShortestPathResult(
+      path: path.reversed.toList(),
+      totalSeconds: bestFinal,
+      exploredNodes: explored,
+      computeTime: stopwatch.elapsed,
+      stepTypes: stepTypes.reversed.toList(),
     );
   }
 }

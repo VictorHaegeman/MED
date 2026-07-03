@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
 import 'core/graph.dart';
+import 'core/graph_store.dart';
 import 'screens/main_shell.dart';
 import 'theme.dart';
 
-// Singleton graphe — chargé une seule fois au démarrage.
-TransportGraph? _graph;
-TransportGraph get appGraph => _graph!;
+// Singleton graphe — défini dans core/graph_store.dart, ré-exporté ici pour
+// que les écrans continuent de l'importer via main.dart.
+export 'core/graph_store.dart' show appGraph;
 
 // Chemin actif partagé entre ResultsScreen (écriture) et MapScreen (lecture).
 // null = aucun trajet sélectionné (vue réseau globale).
@@ -24,7 +25,7 @@ final tripSavedNotifier = ValueNotifier<int>(0);
 void main() async {
   // Obligatoire avant tout appel à rootBundle ou compute() hors widget tree.
   WidgetsFlutterBinding.ensureInitialized();
-  _graph = await TransportGraph.fromAsset('assets/graph/idfm_graph.json');
+  graphInstance = await TransportGraph.fromAsset('assets/graph/idfm_graph.json');
   runApp(const MedApp());
 }
 

@@ -1,7 +1,8 @@
 import 'dart:ui';
 
 /// Modes de transport gérés par le graphe intermodal.
-enum TransportMode { metro, tram, bus, walk }
+/// `train` = RER / Transilien (routeType GTFS 2).
+enum TransportMode { metro, train, tram, bus, walk }
 
 /// Un segment d'itinéraire : soit un trajet en véhicule, soit de la marche,
 /// soit un point d'arrêt remarquable (départ, correspondance, arrivée).
@@ -88,4 +89,26 @@ class Itinerary {
   final double? fromLon;
   final double? toLat;
   final double? toLon;
+
+  /// Copie avec surbrillance ajustée — utilisé après le tri par durée pour
+  /// ne mettre en avant que l'itinéraire le plus rapide.
+  Itinerary copyWith({bool? highlighted}) => Itinerary(
+        tag: tag,
+        tagColor: tagColor,
+        durationLabel: durationLabel,
+        detail: detail,
+        walkLabel: walkLabel,
+        co2Label: co2Label,
+        modes: modes,
+        legs: legs,
+        summary: summary,
+        perfNote: perfNote,
+        pathNodeIds: pathNodeIds,
+        totalSeconds: totalSeconds,
+        highlighted: highlighted ?? this.highlighted,
+        fromLat: fromLat,
+        fromLon: fromLon,
+        toLat: toLat,
+        toLon: toLon,
+      );
 }

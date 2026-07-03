@@ -2,6 +2,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 
@@ -56,6 +57,22 @@ class Edge {
 
 /// Graphe orienté pondéré, en listes d'adjacence.
 class TransportGraph {
+  /// Vitesse plafond du réseau en m/s (~137 km/h, Transilien en pointe).
+  ///
+  /// Double rôle :
+  /// 1. Garde-fou données : toute arête `ride` impliquant une vitesse
+  ///    supérieure (glitchs GTFS observés jusqu'à 327 km/h) voit son poids
+  ///    relevé à distance/vitesse.
+  /// 2. Ce plancher garantit PAR CONSTRUCTION l'admissibilité de
+  ///    l'heuristique A* h(n) = distance_vol_d_oiseau / maxSpeedMs.
+  static const double maxSpeedMs = 38.0;
+
+  /// Vitesse de marche plafond (m/s). Les arêtes `transfer` du GTFS
+  /// contiennent ~35 000 « téléportations » (min_transfer_time très inférieur
+  /// au temps de marche physique) : on relève leur poids au temps de marche
+  /// réel avant l'élagage à 6 min.
+  static const double maxWalkMps = 1.6;
+
   final Map<String, GraphNode> nodes = {};
   final Map<String, List<Edge>> _adjacency = {};
 
@@ -81,10 +98,11 @@ class TransportGraph {
   /// Parsing hors du thread UI via compute() pour ne pas bloquer l'interface.
   static Future<TransportGraph> fromAsset(String assetPath) async {
     final jsonString = await rootBundle.loadString(assetPath);
-    return compute(_parseGraph, jsonString);
+    return compute(fromJsonString, jsonString);
   }
 
-  static TransportGraph _parseGraph(String jsonString) {
+  /// Parsing synchrone — public pour les tests (chargement via dart:io).
+  static TransportGraph fromJsonString(String jsonString) {
     final data = jsonDecode(jsonString) as Map<String, dynamic>;
     final graph = TransportGraph();
 
@@ -126,13 +144,31 @@ class TransportGraph {
       final m = e as Map<String, dynamic>;
       final from = m['from'] as String;
       final to = m['to'] as String;
+      final fromNode = graph.nodes[from];
+      final toNode = graph.nodes[to];
+      if (fromNode == null || toNode == null) continue;
       final type = EdgeType.values.byName(m['type'] as String);
-      final w = (m['weightSeconds'] as num).toDouble();
-      // Élague les correspondances à pied trop longues.
-      if (type == EdgeType.transfer && w > maxTransferSecs) continue;
-      // Interdit de ROULER en bus de nuit (les correspondances vers ces arrêts
-      // restent autorisées, mais pas les trajets ride Noctilien).
-      if (type == EdgeType.ride && isNoctilien(from)) continue;
+      double w = (m['weightSeconds'] as num).toDouble();
+
+      final distM =
+          _haversineM(fromNode.lat, fromNode.lon, toNode.lat, toNode.lon);
+      if (type == EdgeType.ride) {
+        // Plancher de vitesse réseau : corrige les horaires GTFS aberrants
+        // et garantit l'admissibilité de l'heuristique A*.
+        final minW = distM / maxSpeedMs;
+        if (w < minW) w = minW;
+        // Interdit de ROULER en bus de nuit (les correspondances vers ces
+        // arrêts restent autorisées, mais pas les trajets ride Noctilien).
+        if (isNoctilien(from)) continue;
+      } else {
+        // Plancher de vitesse de marche : neutralise les « téléportations »
+        // (min_transfer_time GTFS incohérent avec la distance physique).
+        final minW = distM / maxWalkMps;
+        if (w < minW) w = minW;
+        // Élague les correspondances à pied trop longues.
+        if (w > maxTransferSecs) continue;
+      }
+
       final key = '$from|$to|${type.name}';
       final ex = best[key];
       if (ex == null || w < ex.weightSeconds) {
@@ -147,12 +183,22 @@ class TransportGraph {
     }
 
     for (final edge in best.values) {
-      if (graph.nodes.containsKey(edge.from) &&
-          graph.nodes.containsKey(edge.to)) {
-        graph.addEdge(edge);
-      }
+      graph.addEdge(edge);
     }
 
     return graph;
+  }
+
+  static double _haversineM(
+      double lat1, double lon1, double lat2, double lon2) {
+    const r = 6371000.0;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLon = (lon2 - lon1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) *
+            cos(lat2 * pi / 180) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+    return r * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
 }

@@ -33,8 +33,11 @@ class Co2Service {
       final b = g.nodes[path[i + 1]];
       if (a == null || b == null) continue;
       // Seuls les vrais trajets véhicule émettent et sont comparés à la voiture.
-      final isRide =
-          i < stepTypes.length ? stepTypes[i] == EdgeType.ride : true;
+      // Sans stepTypes (ex : MapScreen), on vérifie qu'une arête ride existe
+      // réellement — sinon ce pas était de la marche.
+      final isRide = i < stepTypes.length
+          ? stepTypes[i] == EdgeType.ride
+          : _hasRideEdge(g, path[i], path[i + 1]);
       if (!isRide) continue;
       final d = _haversineKm(a.lat, a.lon, b.lat, b.lon);
       rideKm += d;
@@ -87,6 +90,13 @@ class Co2Service {
       '${(kg / 1.7).toStringAsFixed(1)} pizza de CO₂ évitée 🍕',
       '${(kg * 1000 / 5).toStringAsFixed(0)} recharges de smartphone 📱',
     ];
+  }
+
+  static bool _hasRideEdge(TransportGraph g, String from, String to) {
+    for (final e in g.neighbors(from)) {
+      if (e.to == to && e.type == EdgeType.ride) return true;
+    }
+    return false;
   }
 
   static double _haversineKm(

@@ -1,103 +1,361 @@
 /// Service d'itinéraires — point de jonction entre l'UI et le cœur algo.
+///
+/// Une requête = UN SEUL passage A* multi-source/multi-cible (TransitRouter),
+/// quel que soit le nombre de quais/arrêts candidats au départ et à l'arrivée.
+/// L'ancien code lançait un A* par PAIRE (départ × arrivée) : pour des arrêts
+/// très dupliqués (« Mairie » = 1 118 nœuds), cela explosait en milliers de
+/// runs ET sélectionnait des paires absurdes entre deux villes homonymes.
 library;
 
 import 'dart:math';
 import 'dart:ui' show Color;
 
-import '../main.dart' show appGraph;
 import '../models/itinerary.dart';
 import '../models/search_result.dart';
 import '../services/co2_service.dart';
 import 'algorithms/shortest_path.dart';
 import 'graph.dart';
+import 'graph_store.dart';
+
+/// Extrémité résolue : nœuds candidats avec leur coût d'approche à pied,
+/// plus un point de référence géographique (marche directe, carte).
+class _Endpoint {
+  const _Endpoint({required this.costs, required this.lat, required this.lon});
+  final Map<String, double> costs; // nodeId → secondes de marche d'approche
+  final double lat;
+  final double lon;
+}
 
 class RouterService {
-  static const _walkMps = 1.389; // 5 km/h
+  /// [graph] permet d'injecter un graphe pour les tests/benchmarks ;
+  /// par défaut, le singleton chargé au démarrage de l'app.
+  RouterService({TransportGraph? graph}) : _graphOverride = graph;
 
-  /// [modeFilter] null = tous les modes (retourne jusqu'à 3 variantes).
-  /// Sinon, retourne uniquement les routes utilisant ce mode.
+  static const _walkMps = 1.35; // vitesse de marche ~4,9 km/h
+  static const _walkDetour = 1.25; // détour rues réelles vs vol d'oiseau
+  static const _walkRadiusM = 800.0; // rabattement à pied autour d'une adresse
+  static const _clusterRadiusM = 800.0; // regroupement des arrêts homonymes
+
+  final TransportGraph? _graphOverride;
+  final _transit = TransitRouter();
+
+  /// [modeFilter] null = tous les modes (variantes triées par durée).
+  /// Sinon, routes n'utilisant QUE ce mode (+ marche), avec repli combiné.
   Future<List<Itinerary>> findItineraries(
     SearchResult from,
     SearchResult to, {
     TransportMode? modeFilter,
   }) async {
-    final g = appGraph;
-    final (fromIds, fromWalkSecs) = _resolveSource(g, from);
-    final (toIds, toWalkSecs) = _resolveSource(g, to);
-    if (fromIds.isEmpty || toIds.isEmpty) return [];
+    final g = _graphOverride ?? appGraph;
+    final src = _resolveEndpoint(g, from);
+    final dst = _resolveEndpoint(g, to);
+    if (src == null || dst == null) return [];
 
     final results = <Itinerary>[];
 
     if (modeFilter == null) {
-      // --- 3 variantes : rapide, moins de correspondances, métro+RER ---
-
-      // 1. Le plus rapide (tous modes)
-      final r1 = _bestPath(g, fromIds, toIds);
-      if (r1 != null && r1.found) {
-        results.add(_toItinerary(g, r1,
-            tag: 'LE PLUS RAPIDE',
-            tagColor: const Color(0xFF3B82F6),
-            highlighted: true,
-            from: from, to: to,
-            fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+      // --- « Tous » : le plus rapide, moins de correspondances, métro+RER ---
+      final r1 = _route(g, src, dst);
+      if (r1 != null) {
+        results.add(_toItinerary(g, r1, from, to, src, dst,
+            tag: 'LE PLUS RAPIDE', tagColor: const Color(0xFF3B82F6)));
       }
-
-      // 2. Moins de correspondances (pénalité 7 min par transfert)
-      final r2 = _bestPath(g, fromIds, toIds, transferPenaltySecs: 420);
-      if (r2 != null && r2.found && !_isDuplicate(r2, results)) {
-        results.add(_toItinerary(g, r2,
+      // Budget des variantes : au-delà de ~2,5× le plus rapide elles seraient
+      // sans intérêt — l'abandon anticipé évite d'explorer tout le graphe.
+      final budget = r1 != null
+          ? r1.totalSeconds * 2.5 + 1500
+          : double.infinity;
+      final r2 =
+          _route(g, src, dst, transferPenaltySecs: 420, maxCostSecs: budget);
+      if (r2 != null && !_isDuplicate(r2, results)) {
+        results.add(_toItinerary(g, r2, from, to, src, dst,
             tag: 'MOINS DE CORRESPONDANCES',
-            tagColor: const Color(0xFF10B981),
-            highlighted: false,
-            from: from, to: to,
-            fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+            tagColor: const Color(0xFF10B981)));
       }
-
-      // 3. Métro + RER uniquement
-      final r3 = _bestPath(g, fromIds, toIds,
-          edgeFilter: _filterForMode(g, TransportMode.metro));
-      if (r3 != null && r3.found && !_isDuplicate(r3, results)) {
-        results.add(_toItinerary(g, r3,
-            tag: 'MÉTRO + RER',
-            tagColor: const Color(0xFF8B5CF6),
-            highlighted: false,
-            from: from, to: to,
-            fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+      // Inutile si le plus rapide est déjà 100 % métro/RER : la variante
+      // filtrée redonnerait exactement le même chemin optimal.
+      final r3 = (r1 != null && _isPureRail(g, r1))
+          ? null
+          : _route(g, src, dst,
+              edgeFilter: _filterForMode(g, TransportMode.metro),
+              maxCostSecs: budget);
+      if (r3 != null && !_isDuplicate(r3, results)) {
+        results.add(_toItinerary(g, r3, from, to, src, dst,
+            tag: 'MÉTRO + RER', tagColor: const Color(0xFF8B5CF6)));
+      }
+      // Si les variantes se confondent (même chemin optimal), on force une
+      // vraie alternative par pénalisation d'arêtes (méthode edge-penalty).
+      if (results.length < 2 && r1 != null) {
+        final penalized = <String>{
+          for (int i = 0; i < r1.path.length - 1; i++)
+            '${r1.path[i]}|${r1.path[i + 1]}'
+        };
+        final alt = _route(g, src, dst,
+            penalizedEdges: penalized,
+            edgePenaltySecs: 300,
+            maxCostSecs: r1.totalSeconds * 1.5 + 1200);
+        if (alt != null &&
+            !_isDuplicate(alt, results) &&
+            _realDurationSecs(g, alt, src, dst) <=
+                r1.totalSeconds * 1.5) {
+          results.add(_toItinerary(g, alt, from, to, src, dst,
+              tag: 'ALTERNATIVE', tagColor: const Color(0xFF10B981)));
+        }
       }
     } else {
       // --- Mode filtré : jusqu'à 3 chemins DISTINCTS en mode pur ---
       final filter = _filterForMode(g, modeFilter);
-      final paths = _distinctPaths(g, fromIds, toIds,
-          edgeFilter: filter, count: 3);
+      final paths =
+          _distinctPaths(g, src, dst, edgeFilter: filter, count: 3);
 
       if (paths.isNotEmpty) {
         final modeColor = _colorForMode(modeFilter);
         const labels = ['LE PLUS RAPIDE', 'ALTERNATIVE 1', 'ALTERNATIVE 2'];
         for (int i = 0; i < paths.length; i++) {
-          final prefix = _tagForMode(modeFilter);
-          results.add(_toItinerary(g, paths[i],
-              tag: '$prefix · ${labels[i]}',
-              tagColor: modeColor,
-              highlighted: i == 0,
-              from: from, to: to,
-              fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+          results.add(_toItinerary(g, paths[i], from, to, src, dst,
+              tag: '${_tagForMode(modeFilter)} · ${labels[i]}',
+              tagColor: modeColor));
         }
       } else {
-        // --- Fallback : aucun trajet 100 % en mode pur ---
-        // On complète avec les autres moyens (itinéraire combiné).
-        final combined = _bestPath(g, fromIds, toIds);
-        if (combined != null && combined.found) {
-          results.add(_toItinerary(g, combined,
+        // Repli : aucun trajet 100 % dans ce mode → itinéraire combiné.
+        final combined = _route(g, src, dst);
+        if (combined != null) {
+          results.add(_toItinerary(g, combined, from, to, src, dst,
               tag: 'COMBINÉ · ${_tagForMode(modeFilter)} SEUL IMPOSSIBLE',
-              tagColor: const Color(0xFFF59E0B),
-              highlighted: true,
-              from: from, to: to,
-              fromWalkSecs: fromWalkSecs, toWalkSecs: toWalkSecs));
+              tagColor: const Color(0xFFF59E0B)));
         }
       }
     }
 
+    // --- Marche directe, si courte ou compétitive ---
+    final bestTransit = results.isEmpty
+        ? null
+        : results.map((it) => it.totalSeconds).reduce(min);
+    final walk = _walkItinerary(from, to, src, dst, bestTransit);
+    if (walk != null) results.add(walk);
+
+    // --- Tri par durée : le plus court d'abord, surbrillance sur le 1er ---
+    results.sort((a, b) => a.totalSeconds.compareTo(b.totalSeconds));
+    return [
+      for (int i = 0; i < results.length; i++)
+        results[i].copyWith(highlighted: i == 0),
+    ];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Recherche
+  // ---------------------------------------------------------------------------
+
+  ShortestPathResult? _route(
+    TransportGraph g,
+    _Endpoint src,
+    _Endpoint dst, {
+    bool Function(Edge)? edgeFilter,
+    double transferPenaltySecs = 0,
+    Set<String>? penalizedEdges,
+    double edgePenaltySecs = 0,
+    double maxCostSecs = double.infinity,
+  }) {
+    final r = _transit.route(
+      g,
+      sources: src.costs,
+      targets: dst.costs,
+      edgeFilter: edgeFilter,
+      transferPenaltySecs: transferPenaltySecs,
+      penalizedEdges: penalizedEdges,
+      edgePenaltySecs: edgePenaltySecs,
+      maxCostSecs: maxCostSecs,
+    );
+    return r.found ? r : null;
+  }
+
+  /// Durée RÉELLE d'un chemin : marche d'approche/sortie + poids réels des
+  /// arêtes + attentes d'embarquement — SANS les pénalités artificielles
+  /// (transferPenalty, edgePenalty) qui ne servent qu'à guider la recherche
+  /// d'alternatives. Sans ce recalcul, « MOINS DE CORRESPONDANCES » (+420 s
+  /// par transfert) affichait des minutes fantômes.
+  double _realDurationSecs(
+    TransportGraph g,
+    ShortestPathResult result,
+    _Endpoint src,
+    _Endpoint dst,
+  ) {
+    if (result.path.isEmpty) return 0;
+    double total = (src.costs[result.path.first] ?? 0) +
+        (dst.costs[result.path.last] ?? 0);
+    for (int i = 0; i < result.stepTypes.length; i++) {
+      final type = result.stepTypes[i];
+      total += _edgeWeightOfType(
+          g, result.path[i], result.path[i + 1], type);
+      // Embarquement (début d'un groupe ride) : attente du véhicule,
+      // même modèle que TransitRouter.
+      if (type == EdgeType.ride &&
+          (i == 0 || result.stepTypes[i - 1] != EdgeType.ride)) {
+        total += kBoardingWaitSecs[g.nodes[result.path[i]]?.routeType] ??
+            kDefaultBoardingWaitSecs;
+      }
+    }
+    return total;
+  }
+
+  /// Génère jusqu'à [count] chemins DISTINCTS via la méthode edge-penalty :
+  /// on pénalise les arêtes du chemin précédent pour forcer un détour.
+  List<ShortestPathResult> _distinctPaths(
+    TransportGraph g,
+    _Endpoint src,
+    _Endpoint dst, {
+    bool Function(Edge)? edgeFilter,
+    int count = 3,
+  }) {
+    final results = <ShortestPathResult>[];
+    final penalized = <String>{};
+    final seenKeys = <String>{};
+    double firstRealSecs = 0;
+
+    for (int k = 0; k < count; k++) {
+      final r = _route(
+        g, src, dst,
+        edgeFilter: edgeFilter,
+        penalizedEdges: k == 0 ? null : penalized,
+        edgePenaltySecs: k == 0 ? 0 : 300,
+        // 1er chemin : borné au plus long trajet IdF plausible (3 h).
+        // Suivants : au-delà de 1,3× le plus rapide ils seront rejetés.
+        maxCostSecs: k == 0 ? 10800 : firstRealSecs * 1.3 + 1200,
+      );
+      if (r == null) break;
+      final key = r.path.join('|');
+      if (!seenKeys.add(key)) break; // plus d'alternative distincte
+      // Écarte les alternatives peu compétitives (> 1,3× le plus rapide),
+      // comparées sur la durée RÉELLE (hors pénalités de recherche).
+      final realSecs = _realDurationSecs(g, r, src, dst);
+      if (results.isEmpty) {
+        firstRealSecs = realSecs;
+      } else if (realSecs > firstRealSecs * 1.3) {
+        break;
+      }
+      results.add(r);
+      for (int i = 0; i < r.path.length - 1; i++) {
+        penalized.add('${r.path[i]}|${r.path[i + 1]}');
+      }
+    }
     return results;
+  }
+
+  /// True si tous les segments véhicule de [r] sont métro ou RER/Transilien.
+  bool _isPureRail(TransportGraph g, ShortestPathResult r) {
+    for (int i = 0; i < r.stepTypes.length; i++) {
+      if (r.stepTypes[i] != EdgeType.ride) continue;
+      final rt = g.nodes[r.path[i]]?.routeType;
+      if (rt != 1 && rt != 2) return false;
+    }
+    return true;
+  }
+
+  /// Retourne true si [r] a le même chemin qu'un itinéraire déjà dans [list].
+  bool _isDuplicate(ShortestPathResult r, List<Itinerary> list) {
+    final key = r.path.join('|');
+    return list.any((it) => it.pathNodeIds.join('|') == key);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Résolution SearchResult → extrémité (nœuds candidats + marche)
+  // ---------------------------------------------------------------------------
+
+  _Endpoint? _resolveEndpoint(TransportGraph g, SearchResult src) {
+    if (src.isAddress) return _resolveAddress(g, src.lat!, src.lon!);
+    return _resolveStation(g, src.displayName);
+  }
+
+  /// Adresse : tous les arrêts à distance de marche (rayon 800 m), coût =
+  /// temps de marche réel. Le routeur multi-source choisit le meilleur départ
+  /// — plus de rabattement arbitraire sur « l'arrêt le plus proche ».
+  _Endpoint? _resolveAddress(TransportGraph g, double lat, double lon) {
+    final costs = <String, double>{};
+    GraphNode? nearest;
+    double nearestD = double.infinity;
+    for (final n in g.nodes.values) {
+      final d = _haversine(lat, lon, n.lat, n.lon);
+      if (d < nearestD) {
+        nearestD = d;
+        nearest = n;
+      }
+      if (d <= _walkRadiusM) costs[n.id] = d * _walkDetour / _walkMps;
+    }
+    if (costs.isEmpty) {
+      if (nearest == null) return null;
+      // Aucun arrêt à distance de marche : rabattement sur le pôle le plus
+      // proche (tous les arrêts dans un halo autour de lui).
+      final haloM = nearestD + 250;
+      for (final n in g.nodes.values) {
+        final d = _haversine(lat, lon, n.lat, n.lon);
+        if (d <= haloM) costs[n.id] = d * _walkDetour / _walkMps;
+      }
+    }
+    return _Endpoint(costs: costs, lat: lat, lon: lon);
+  }
+
+  /// Station : les noms d'arrêts se répètent partout en Île-de-France
+  /// (« Mairie » = 1 118 nœuds répartis sur 433 sites physiques !). On
+  /// regroupe les homonymes en pôles géographiques (800 m) et on ne garde
+  /// que le meilleur pôle : d'abord ceux desservis par du rail
+  /// (métro/RER/tram), à défaut le plus gros. Sans cela, le routeur
+  /// choisissait la paire la plus rapide entre deux villes différentes.
+  _Endpoint? _resolveStation(TransportGraph g, String name) {
+    final q = name.toLowerCase().trim();
+    if (q.isEmpty) return null;
+
+    var matches = <GraphNode>[
+      for (final n in g.nodes.values)
+        if (n.stationName.toLowerCase() == q) n
+    ];
+    if (matches.isEmpty) {
+      // Saisie libre (pas via suggestions) : préfixe, puis inclusion.
+      matches = [
+        for (final n in g.nodes.values)
+          if (n.stationName.toLowerCase().startsWith(q)) n
+      ];
+    }
+    if (matches.isEmpty) {
+      matches = [
+        for (final n in g.nodes.values)
+          if (n.stationName.toLowerCase().contains(q)) n
+      ];
+    }
+    if (matches.isEmpty) return null;
+
+    // Clustering géographique glouton (rayon _clusterRadiusM).
+    final clusters = <List<GraphNode>>[];
+    for (final n in matches) {
+      var placed = false;
+      for (final c in clusters) {
+        if (_haversine(n.lat, n.lon, c.first.lat, c.first.lon) <=
+            _clusterRadiusM) {
+          c.add(n);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) clusters.add([n]);
+    }
+
+    int score(List<GraphNode> c) {
+      final hasRail =
+          c.any((n) => n.routeType != null && n.routeType! <= 2);
+      return (hasRail ? 100000 : 0) + c.length;
+    }
+
+    clusters.sort((a, b) => score(b).compareTo(score(a)));
+    final best = clusters.first;
+    double lat = 0, lon = 0;
+    for (final n in best) {
+      lat += n.lat;
+      lon += n.lon;
+    }
+    return _Endpoint(
+      costs: {for (final n in best) n.id: 0.0},
+      lat: lat / best.length,
+      lon: lon / best.length,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -111,6 +369,7 @@ class RouterService {
       final rt = g.nodes[edge.from]?.routeType;
       return switch (mode) {
         TransportMode.metro => rt == 1 || rt == 2, // métro + RER
+        TransportMode.train => rt == 2,
         TransportMode.tram => rt == 0,
         TransportMode.bus => rt == 3,
         TransportMode.walk => false,
@@ -120,6 +379,7 @@ class RouterService {
 
   String _tagForMode(TransportMode mode) => switch (mode) {
         TransportMode.metro => 'MÉTRO + RER',
+        TransportMode.train => 'RER + TRAIN',
         TransportMode.tram => 'TRAM UNIQUEMENT',
         TransportMode.bus => 'BUS UNIQUEMENT',
         TransportMode.walk => 'À PIED',
@@ -127,113 +387,11 @@ class RouterService {
 
   Color _colorForMode(TransportMode mode) => switch (mode) {
         TransportMode.metro => const Color(0xFF8B5CF6),
+        TransportMode.train => const Color(0xFFEF4444),
         TransportMode.tram => const Color(0xFF14B8A6),
         TransportMode.bus => const Color(0xFFF59E0B),
         TransportMode.walk => const Color(0xFF6B7280),
       };
-
-  // ---------------------------------------------------------------------------
-  // Résolution SearchResult → node IDs + marche
-  // ---------------------------------------------------------------------------
-
-  (List<String>, double) _resolveSource(TransportGraph g, SearchResult src) {
-    if (!src.isAddress) return (_nodeIdsForName(g, src.displayName), 0);
-    final nearest = _nearestNode(g, src.lat!, src.lon!);
-    if (nearest == null) return ([], 0);
-    final distM = _haversine(src.lat!, src.lon!, nearest.lat, nearest.lon);
-    return (_nodeIdsForName(g, nearest.stationName), distM / _walkMps);
-  }
-
-  GraphNode? _nearestNode(TransportGraph g, double lat, double lon) {
-    GraphNode? best;
-    double minD = double.infinity;
-    final seen = <String>{};
-    for (final n in g.nodes.values) {
-      if (!seen.add(n.stationName)) continue;
-      final d = _haversine(lat, lon, n.lat, n.lon);
-      if (d < minD) { minD = d; best = n; }
-    }
-    return best;
-  }
-
-  List<String> _nodeIdsForName(TransportGraph g, String name) {
-    final lower = name.toLowerCase().trim();
-    return g.nodes.values
-        .where((n) => n.stationName.toLowerCase() == lower)
-        .map((n) => n.id)
-        .toList();
-  }
-
-  ShortestPathResult? _bestPath(
-    TransportGraph g,
-    List<String> fromIds,
-    List<String> toIds, {
-    bool Function(Edge)? edgeFilter,
-    double transferPenaltySecs = 0,
-    Set<String>? penalizedEdges,
-    double edgePenaltySecs = 0,
-  }) {
-    final algo = AStar();
-    ShortestPathResult? best;
-    for (final f in fromIds) {
-      for (final t in toIds) {
-        final r = algo.run(g, f, t,
-            edgeFilter: edgeFilter,
-            transferPenaltySecs: transferPenaltySecs,
-            penalizedEdges: penalizedEdges,
-            edgePenaltySecs: edgePenaltySecs);
-        if (r.found && (best == null || r.totalSeconds < best.totalSeconds)) {
-          best = r;
-        }
-      }
-    }
-    return best;
-  }
-
-  /// Génère jusqu'à [count] chemins DISTINCTS via la méthode edge-penalty :
-  /// on pénalise les arêtes du chemin précédent pour forcer un détour.
-  List<ShortestPathResult> _distinctPaths(
-    TransportGraph g,
-    List<String> fromIds,
-    List<String> toIds, {
-    bool Function(Edge)? edgeFilter,
-    int count = 3,
-  }) {
-    final results = <ShortestPathResult>[];
-    final penalized = <String>{};
-    final seenKeys = <String>{};
-
-    for (int k = 0; k < count; k++) {
-      // 1er chemin : le plus rapide. Suivants : détour forcé (+300 s/arête).
-      final r = _bestPath(
-        g, fromIds, toIds,
-        edgeFilter: edgeFilter,
-        penalizedEdges: k == 0 ? null : penalized,
-        edgePenaltySecs: k == 0 ? 0 : 300,
-      );
-      if (r == null || !r.found) break;
-      final key = r.path.join('|');
-      if (!seenKeys.add(key)) break; // plus d'alternative distincte
-      // Écarte les alternatives peu compétitives (> 1,3× le plus rapide) :
-      // mieux vaut 1 seule option propre qu'un détour absurde.
-      if (results.isNotEmpty &&
-          r.totalSeconds > results.first.totalSeconds * 1.3) {
-        break;
-      }
-      results.add(r);
-      // Pénalise les arêtes de ce chemin pour l'itération suivante
-      for (int i = 0; i < r.path.length - 1; i++) {
-        penalized.add('${r.path[i]}|${r.path[i + 1]}');
-      }
-    }
-    return results;
-  }
-
-  /// Retourne true si [r] a le même chemin qu'un itinéraire déjà dans [list].
-  bool _isDuplicate(ShortestPathResult r, List<Itinerary> list) {
-    final key = r.path.join('|');
-    return list.any((it) => it.pathNodeIds.join('|') == key);
-  }
 
   // ---------------------------------------------------------------------------
   // Conversion ShortestPathResult → Itinerary
@@ -241,32 +399,40 @@ class RouterService {
 
   Itinerary _toItinerary(
     TransportGraph g,
-    ShortestPathResult result, {
+    ShortestPathResult result,
+    SearchResult from,
+    SearchResult to,
+    _Endpoint src,
+    _Endpoint dst, {
     required String tag,
     required Color tagColor,
-    required bool highlighted,
-    required SearchResult from,
-    required SearchResult to,
-    required double fromWalkSecs,
-    required double toWalkSecs,
   }) {
-    final coreLeg = _buildLegs(g, result.path, result.stepTypes);
+    // Marche d'approche/sortie réellement retenue par le routeur : celle du
+    // nœud de départ/arrivée effectivement choisi dans le chemin optimal.
+    final fromWalkSecs =
+        result.path.isEmpty ? 0.0 : (src.costs[result.path.first] ?? 0.0);
+    final toWalkSecs =
+        result.path.isEmpty ? 0.0 : (dst.costs[result.path.last] ?? 0.0);
+
+    final coreLegs = _buildLegs(g, result.path, result.stepTypes);
     final legs = <Leg>[];
 
-    if (from.isAddress && fromWalkSecs > 0) {
+    if (from.isAddress && fromWalkSecs > 30) {
       final mins = (fromWalkSecs / 60).ceil().clamp(1, 999);
       legs.add(WalkLeg(
           label: '$mins min à pied', subtitle: 'Depuis ${from.displayName}'));
     }
-    legs.addAll(coreLeg);
-    if (to.isAddress && toWalkSecs > 0) {
+    legs.addAll(coreLegs);
+    if (to.isAddress && toWalkSecs > 30) {
       final mins = (toWalkSecs / 60).ceil().clamp(1, 999);
       legs.add(WalkLeg(
           label: '$mins min à pied', subtitle: 'Vers ${to.displayName}'));
     }
 
     final modes = legs.whereType<RideLeg>().map((r) => r.mode).toSet();
-    final totalSecs = result.totalSeconds + fromWalkSecs + toWalkSecs;
+    // Durée RÉELLE recalculée depuis le chemin (marche + arêtes + attentes),
+    // débarrassée des pénalités artificielles de recherche d'alternatives.
+    final totalSecs = _realDurationSecs(g, result, src, dst);
     // Correspondances = nombre de trajets véhicule − 1 (basé sur les vrais
     // RideLeg, pas sur les arêtes transfer qui modélisent la marche).
     final rideCount = legs.whereType<RideLeg>().length;
@@ -276,7 +442,17 @@ class RouterService {
         ? '${mins ~/ 60} h ${(mins % 60).toString().padLeft(2, '0')}'
         : '$mins min';
 
-    final walkMin = ((fromWalkSecs + toWalkSecs) / 60).round();
+    // Marche totale = approche + sortie + correspondances à pied du chemin.
+    double walkSecs = fromWalkSecs + toWalkSecs;
+    for (int i = 0;
+        i < result.stepTypes.length && i + 1 < result.path.length;
+        i++) {
+      if (result.stepTypes[i] != EdgeType.ride) {
+        walkSecs += _edgeWeightOfType(
+            g, result.path[i], result.path[i + 1], result.stepTypes[i]);
+      }
+    }
+    final walkMin = (walkSecs / 60).round();
 
     // CO₂ réel calculé par trajet (source : transilien.com/calcul-emissions-co2)
     final co2 = Co2Service.forPath(g, result.path, result.stepTypes);
@@ -291,18 +467,78 @@ class RouterService {
       detail: '$transfers correspondance${transfers != 1 ? 's' : ''}',
       walkLabel: walkMin > 0 ? '$walkMin min à pied' : '0 min à pied',
       co2Label: co2Label,
-      modes: modes.isEmpty ? {TransportMode.metro} : modes,
+      modes: modes.isEmpty ? {TransportMode.walk} : modes,
       legs: legs,
-      summary: '$durationLabel · $transfers correspondance${transfers != 1 ? 's' : ''} · $co2Label',
+      summary:
+          '$durationLabel · $transfers correspondance${transfers != 1 ? 's' : ''} · $co2Label',
       perfNote: '⚡ ${result.computeTime.inMilliseconds} ms'
-          ' — A* · ${result.exploredNodes} nœuds',
+          ' — A* multi-source · ${result.exploredNodes} états',
       pathNodeIds: result.path,
       totalSeconds: totalSecs,
-      highlighted: highlighted,
       fromLat: from.isAddress ? from.lat : null,
       fromLon: from.isAddress ? from.lon : null,
       toLat: to.isAddress ? to.lat : null,
       toLon: to.isAddress ? to.lon : null,
+    );
+  }
+
+  /// Itinéraire 100 % marche entre les deux points de référence — proposé
+  /// quand il est court ou compétitif face au meilleur trajet en transport.
+  Itinerary? _walkItinerary(
+    SearchResult from,
+    SearchResult to,
+    _Endpoint src,
+    _Endpoint dst,
+    double? bestTransitSecs,
+  ) {
+    final distM =
+        _haversine(src.lat, src.lon, dst.lat, dst.lon) * _walkDetour;
+    final secs = distM / _walkMps;
+    if (secs < 60) return null; // même endroit
+    if (secs > 2700) return null; // > 45 min de marche : hors sujet
+    if (bestTransitSecs != null &&
+        secs > bestTransitSecs * 1.4 &&
+        secs > 1200) {
+      return null; // pas compétitif
+    }
+
+    final mins = (secs / 60).round().clamp(1, 999);
+    final km = distM / 1000;
+    // Marcher évite l'intégralité des émissions voiture sur cette distance.
+    final savedKg = Co2Service.voitureGPerKm * km / 1000;
+    final co2Label = savedKg >= 1
+        ? '−${savedKg.toStringAsFixed(2)} kg CO₂'
+        : '−${(savedKg * 1000).toStringAsFixed(0)} g CO₂';
+    final durationLabel = mins >= 60
+        ? '${mins ~/ 60} h ${(mins % 60).toString().padLeft(2, '0')}'
+        : '$mins min';
+    const grey = Color(0xFF6B7280);
+
+    return Itinerary(
+      tag: 'À PIED',
+      tagColor: grey,
+      durationLabel: durationLabel,
+      detail: '${km.toStringAsFixed(1)} km · 0 correspondance',
+      walkLabel: '$mins min à pied',
+      co2Label: co2Label,
+      modes: const {TransportMode.walk},
+      legs: [
+        StationPoint(
+            name: from.displayName, subtitle: 'Départ', color: grey),
+        WalkLeg(
+            label: '$mins min à pied (${km.toStringAsFixed(1)} km)',
+            subtitle: 'Trajet direct'),
+        StationPoint(
+            name: to.displayName, subtitle: 'Arrivée', color: grey),
+      ],
+      summary: '$durationLabel · marche directe · $co2Label',
+      perfNote: '⚡ itinéraire piéton — vol d\'oiseau × $_walkDetour',
+      pathNodeIds: const [],
+      totalSeconds: secs,
+      fromLat: src.lat,
+      fromLon: src.lon,
+      toLat: dst.lat,
+      toLon: dst.lon,
     );
   }
 
@@ -356,13 +592,7 @@ class RouterService {
             g.nodes[path[i]]?.line == line) {
           i++;
         }
-        final stops = path
-            .sublist(start, i + 1)
-            .map((id) => g.nodes[id]?.stationName)
-            .whereType<String>()
-            .toSet()
-            .length;
-        final stopCount = (stops - 1).clamp(1, 999);
+        final stopCount = (i - start).clamp(1, 999);
         legs.add(RideLeg(
           mode: _modeFromRouteType(rideNode.routeType),
           lineLabel: rideNode.lineShortName ?? '?',
@@ -460,10 +690,12 @@ class RouterService {
     return lum > 160;
   }
 
+  /// routeType GTFS → mode d'affichage. 2 = RER/Transilien (train), qui était
+  /// auparavant affiché comme bus (bug).
   TransportMode _modeFromRouteType(int? rt) => switch (rt) {
         0 => TransportMode.tram,
         1 => TransportMode.metro,
-        2 => TransportMode.bus,
+        2 => TransportMode.train,
         3 => TransportMode.bus,
         _ => TransportMode.metro,
       };
@@ -478,5 +710,4 @@ class RouterService {
     }
     return '';
   }
-
 }

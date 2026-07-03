@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/algorithms/connectivity.dart';
 import '../main.dart' show appGraph;
 import '../models/itinerary.dart';
 import '../theme.dart';
@@ -7,6 +8,10 @@ import '../widgets/common.dart';
 
 class NetworkScreen extends StatelessWidget {
   const NetworkScreen({super.key});
+
+  /// Analyse de connexité (BFS, exigence AO) — calculée une seule fois,
+  /// à la première ouverture de l'écran, puis mise en cache.
+  static Future<ConnectivityReport>? _connectivity;
 
   @override
   Widget build(BuildContext context) {
@@ -35,31 +40,70 @@ class NetworkScreen extends StatelessWidget {
   }
 
   Widget _statusCard() {
-    return MedCard(
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: MedColors.green.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.check_circle_rounded,
-                color: MedColors.green, size: 26),
-          ),
-          const SizedBox(width: 14),
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    // Vraie vérification d'intégrité après import (BFS fait main) — le badge
+    // n'est plus une affirmation codée en dur.
+    _connectivity ??= Future(() => ConnectivityChecker().analyze(appGraph));
+    return FutureBuilder<ConnectivityReport>(
+      future: _connectivity,
+      builder: (context, snap) {
+        final Widget icon;
+        final String title;
+        final String subtitle;
+        if (!snap.hasData) {
+          icon = const Padding(
+            padding: EdgeInsets.all(12),
+            child: CircularProgressIndicator(
+                strokeWidth: 2.5, color: MedColors.accent),
+          );
+          title = 'Vérification de la connexité…';
+          subtitle = 'Parcours BFS sur ${appGraph.nodeCount} nœuds';
+        } else {
+          final rep = snap.data!;
+          final mainSize =
+              rep.components.isEmpty ? 0 : rep.components.first.length;
+          final pct = appGraph.nodeCount == 0
+              ? 100.0
+              : mainSize * 100 / appGraph.nodeCount;
+          final ok = pct >= 99.0;
+          icon = Icon(
+              ok ? Icons.check_circle_rounded : Icons.warning_amber_rounded,
+              color: ok ? MedColors.green : MedColors.orange,
+              size: 26);
+          title = ok ? 'Réseau connexe (BFS)' : 'Réseau fragmenté';
+          subtitle = 'Composante principale : ${pct.toStringAsFixed(1)} % '
+              'des nœuds · ${rep.components.length} composante'
+              '${rep.components.length > 1 ? 's' : ''}';
+        }
+        return MedCard(
+          child: Row(
             children: [
-              Text('Réseau connexe',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-              Text('Toutes les stations sont atteignables',
-                  style: TextStyle(fontSize: 12, color: MedColors.secondary)),
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: MedColors.green.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: icon,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w700)),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            fontSize: 12, color: MedColors.secondary)),
+                  ],
+                ),
+              ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -129,6 +173,11 @@ class NetworkScreen extends StatelessWidget {
 
   Widget _statsCard() {
     final g = appGraph;
+    final lineCount = g.nodes.values
+        .map((n) => n.lineShortName)
+        .whereType<String>()
+        .toSet()
+        .length;
     return MedCard(
       child: Column(
         children: [
@@ -136,9 +185,11 @@ class NetworkScreen extends StatelessWidget {
           const Divider(color: MedColors.dividerColor, height: 22),
           _stat('${g.edgeCount}', 'Arêtes intermodales'),
           const Divider(color: MedColors.dividerColor, height: 22),
-          _stat('< 15 ms', 'Temps de calcul moyen (A*)'),
+          _stat('$lineCount', 'Lignes (tous modes)'),
           const Divider(color: MedColors.dividerColor, height: 22),
-          _stat('6,2 Mo', 'Pic mémoire du graphe'),
+          // Mesuré par test/core/real_graph_integration_test.dart (benchmark
+          // reproductible, seed fixe) — requête complète « Tous » (3 variantes).
+          _stat('p95 < 1 s', 'Requête itinéraire (benchmark)'),
         ],
       ),
     );
@@ -176,6 +227,7 @@ class NetworkScreen extends StatelessWidget {
   TransportMode _modeFrom(int? rt) => switch (rt) {
         0 => TransportMode.tram,
         1 => TransportMode.metro,
+        2 => TransportMode.train,
         3 => TransportMode.bus,
         _ => TransportMode.metro,
       };

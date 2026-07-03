@@ -51,6 +51,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
       _filter = mode;
       if (mode == null) {
         _filteredItineraries = null; // revient aux résultats de base
+        _baseItineraries.then(_publishFirst); // resynchronise la carte
       } else {
         _filteredItineraries = _router
             .findItineraries(widget.from, widget.to, modeFilter: mode)

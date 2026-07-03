@@ -1,65 +1,103 @@
 # MED — Metro, Efrei, Dodo 🚇
 
-Application mobile d'optimisation des temps de trajet dans le réseau de transport parisien (métro, tram, bus, marche). Projet Solution Delivery 2025-2026, EFREI — Filière IT.
+Application d'optimisation des temps de trajet dans le réseau de transport
+francilien (métro, RER/Transilien, tram, bus, marche). Projet Solution
+Delivery 2025-2026, EFREI — Filière IT.
 
-**État actuel : V0** — UI complète sur données mockées, cœur algorithmique en templates documentés (à implémenter en V1).
+**État actuel : V1** — cœur algorithmique implémenté à la main (Dijkstra, A*,
+BFS, Prim), graphe IDFM réel (~43 000 nœuds, ~478 600 arêtes après élagage),
+recherche multi-source/multi-cible, tests unitaires + tests d'intégration sur
+trajets réels, benchmark reproductible.
 
 ## Prérequis
 
 - [Flutter](https://docs.flutter.dev/get-started/install) ≥ 3.27 (stable)
-- Un émulateur Android/iOS ou un appareil physique
+- Cible principale : web (`flutter run -d chrome`)
 
 ## Installation & lancement
 
 ```bash
-flutter create . --platforms=android,ios   # génère les dossiers plateformes (1ʳᵉ fois)
 flutter pub get
-flutter run
+flutter run -d chrome
 ```
 
 Tests et analyse :
 
 ```bash
 flutter analyze
-flutter test
+flutter test          # 55 tests : unités algo + intégration graphe réel
 ```
+
+## Cœur algorithmique (exigences AO)
+
+| Attendu AO | Implémentation | Fichier |
+|---|---|---|
+| Connexité | BFS / composantes, O(V+E) — badge calculé (plus codé en dur) | `core/algorithms/connectivity.dart` |
+| Arborescence | Prim, tas binaire à la main, O(E log V) | `core/algorithms/spanning_tree.dart` |
+| Plus court chemin | Dijkstra, tas binaire à la main, O((V+E) log V) | `core/algorithms/shortest_path.dart` |
+| Optimisation | A* heuristique géodésique **admissible par construction** (voir hypothèses) | idem |
+| Requête app | `TransitRouter` = même A* étendu **multi-source/multi-cible** : 1 seul run par requête, quel que soit le nombre de quais candidats | idem |
+
+Tout est implémenté à la main (aucune librairie de graphes). Dijkstra et A*
+simple paire restent la référence du benchmark ; `TransitRouter` est vérifié
+contre Dijkstra (même coût optimal) dans les tests.
+
+## Hypothèses de modélisation (documentées, exigence AO)
+
+- **Nœuds (station, ligne)** ; arêtes `ride` (poids = temps GTFS inter-arrêts,
+  meilleure course de la journée) et `transfer` (marche, poids =
+  `min_transfer_time` GTFS, défaut 240 s).
+- **Plancher de vitesse réseau 38 m/s** (`TransportGraph.maxSpeedMs`) appliqué
+  au chargement : corrige les horaires GTFS aberrants (jusqu'à 327 km/h
+  observés) et garantit l'admissibilité de l'heuristique A*
+  (h = haversine / 38 ≤ coût réel pour toute arête).
+- **Plancher de marche 1,6 m/s** sur les transferts (35 000 « téléportations »
+  GTFS corrigées), puis élagage des correspondances > 6 min.
+- **Attentes d'embarquement** (demi-intervalle de passage moyen) : métro 2 min,
+  tram 3,5 min, RER/Transilien 4 min, bus 6 min. L'app fonctionne en « départ
+  maintenant » **sans modèle horaire complet** : l'attente moyenne remplace la
+  consultation des horaires. Monter dans un véhicule coûte l'attente ; rester
+  à bord, non (état « à bord » dans la recherche).
+- **Noctilien exclu** des trajets (pas de modèle horaire → pas de bus de nuit).
+- **Arrêts homonymes** (« Mairie » = 1 118 nœuds sur 433 sites) : résolution
+  par pôle géographique (clustering 800 m, priorité aux pôles ferrés).
+- **Adresses** : rabattement à pied multi-arrêts (rayon 800 m, 4,9 km/h,
+  détour ×1,25) — le routeur choisit le meilleur arrêt de départ/arrivée.
+- Les durées affichées sont recalculées depuis le chemin (poids réels +
+  attentes), **hors pénalités artificielles** servant à générer les variantes.
+
+## Performance (mesurée, reproductible)
+
+`test/core/real_graph_integration_test.dart` (seed fixe) : requête complète
+« Tous » (3-4 passes A*) — **moyenne ~200-400 ms, p95 ~1 s** sur le graphe
+complet en VM debug. Trajets de référence validés (lignes et durées réalistes) :
+Châtelet→Nation M1 11 min · Gare du Nord→Gare de Lyon RER D 10 min ·
+Villejuif→Châtelet M7 21 min · La Défense→Nation RER A 19 min
+(`test/core/real_routes_validation_test.dart`).
 
 ## Structure
 
 ```
 lib/
-├── core/                      # Dart pur, AUCUN import Flutter — testable sans UI
-│   ├── graph.dart             # ✅ Structure du graphe (nœuds (station,ligne), arêtes pondérées)
+├── core/                      # Cœur algo (testable sans UI, cf. graph_store)
+│   ├── graph.dart             # ✅ Graphe + invariants de chargement
+│   ├── graph_store.dart       # ✅ Singleton du graphe (découplé de main.dart)
 │   ├── algorithms/
-│   │   ├── shortest_path.dart # 🔲 Dijkstra (tas binaire) + A* — templates V1
-│   │   ├── connectivity.dart  # 🔲 BFS / composantes connexes — template V1
-│   │   └── spanning_tree.dart # 🔲 Prim (arborescence du réseau) — template V1
-│   └── router_service.dart    # Jonction UI ↔ algo (V0 : données mockées)
-├── data/mock_data.dart        # Itinéraires mockés (à supprimer en V1)
-├── models/itinerary.dart      # Modèles UI (Itinerary, RideLeg, WalkLeg…)
-├── screens/                   # Accueil, Résultats, Détail, Impact & Perf
-├── widgets/common.dart        # Badges de lignes, cartes, chips, boutons
-└── theme.dart                 # Palette (couleurs officielles des lignes)
-test/
-└── core/shortest_path_test.dart  # Tests-contrats écrits AVANT l'implémentation
+│   │   ├── shortest_path.dart # ✅ Dijkstra + A* + TransitRouter multi-source
+│   │   ├── connectivity.dart  # ✅ BFS / composantes connexes
+│   │   └── spanning_tree.dart # ✅ Prim (arborescence du réseau)
+│   └── router_service.dart    # ✅ Résolution arrêts/adresses → itinéraires
+├── data_pipeline/build_graph.dart # GTFS IDFM → assets/graph/idfm_graph.json
+├── models/, screens/, widgets/, services/, theme.dart
+test/core/                     # 55 tests : contrats, optimalité, admissibilité,
+                               # cas limites, trajets réels, benchmark
 ```
-
-## Où implémenter les algorithmes (V1)
-
-Chaque template contient le plan d'implémentation détaillé en commentaire :
-
-1. **Dijkstra** — `lib/core/algorithms/shortest_path.dart` → classe `Dijkstra`. Tas binaire à la main, O((V+E) log V). Un O(V²) naïf est éliminatoire.
-2. **A\*** — même fichier → classe `AStar`. Heuristique géodésique admissible (haversine / vitesse max).
-3. **Connexité** — `connectivity.dart` → `ConnectivityChecker`. BFS, branche le badge "● Connexe" de l'accueil.
-4. **Arborescence** — `spanning_tree.dart` → `PrimMst`. Alimente la visualisation de l'écran Impact.
-5. **Graphe réel** — `graph.dart` → `TransportGraph.fromAsset`. Asset généré par `data-pipeline/` (à créer) depuis le GTFS Île-de-France Mobilités (licence ODbL).
-
-Workflow : implémenter → retirer le `skip:` des tests correspondants dans `test/core/` → CI verte → brancher dans `RouterService` (les `TODO(V1)` marquent chaque point de branchement).
 
 ## Données
 
-- Source prévue : GTFS [Île-de-France Mobilités](https://data.iledefrance-mobilites.fr) — licence ODbL, à citer.
-- Hypothèses de pondération à documenter ici (temps inter-stations, pénalité de correspondance ~4 min).
+- Source : GTFS [Île-de-France Mobilités](https://data.iledefrance-mobilites.fr)
+  — licence ODbL (citée ici conformément à la licence).
+- CO₂ : facteurs transilien.com / ADEME (voir `services/co2_service.dart`).
 - Aucune donnée personnelle. Aucune clé API dans le dépôt.
 
 ## Équipe & contacts AO

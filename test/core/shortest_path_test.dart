@@ -51,18 +51,20 @@ void main() {
       final result = Dijkstra().run(buildTinyGraph(), 'A', 'E');
       expect(result.path, ['A', 'C', 'D', 'E']);
       expect(result.totalSeconds, 70.0);
-    }, skip: 'V1 — à activer quand Dijkstra sera implémenté');
+    });
 
     test('départ == arrivée → chemin trivial, coût 0', () {
       final result = Dijkstra().run(buildTinyGraph(), 'A', 'A');
       expect(result.path, ['A']);
       expect(result.totalSeconds, 0.0);
-    }, skip: 'V1 — à activer quand Dijkstra sera implémenté');
+    });
 
-    test('nœud inexistant → ArgumentError', () {
-      expect(() => Dijkstra().run(buildTinyGraph(), 'A', 'Z'),
-          throwsArgumentError);
-    }, skip: 'V1 — à activer quand Dijkstra sera implémenté');
+    test('nœud inexistant → résultat « not found » (contrat retenu)', () {
+      // Contrat implémenté (cf. algorithm_test.dart) : pas d'exception,
+      // un résultat vide — l'UI gère le cas sans try/catch.
+      final result = Dijkstra().run(buildTinyGraph(), 'A', 'Z');
+      expect(result.found, isFalse);
+    });
   });
 
   group('A*', () {
@@ -71,14 +73,14 @@ void main() {
       final d = Dijkstra().run(g, 'A', 'E');
       final a = AStar().run(g, 'A', 'E');
       expect(a.totalSeconds, d.totalSeconds);
-    }, skip: 'V1 — à activer quand A* sera implémenté');
+    });
 
     test('explore au plus autant de nœuds que Dijkstra', () {
       final g = buildTinyGraph();
       final d = Dijkstra().run(g, 'A', 'E');
       final a = AStar().run(g, 'A', 'E');
       expect(a.exploredNodes, lessThanOrEqualTo(d.exploredNodes));
-    }, skip: 'V1 — à activer quand A* sera implémenté');
+    });
   });
 
   group('Connexité (BFS)', () {
@@ -86,7 +88,7 @@ void main() {
       final report = ConnectivityChecker().analyze(buildTinyGraph());
       expect(report.isConnected, isTrue);
       expect(report.components.length, 1);
-    }, skip: 'V1 — à activer quand le BFS sera implémenté');
+    });
 
     test('nœud isolé → 2 composantes', () {
       final g = buildTinyGraph();
@@ -95,7 +97,7 @@ void main() {
       final report = ConnectivityChecker().analyze(g);
       expect(report.isConnected, isFalse);
       expect(report.components.length, 2);
-    }, skip: 'V1 — à activer quand le BFS sera implémenté');
+    });
   });
 
   group('Arborescence (Prim)', () {
@@ -104,6 +106,6 @@ void main() {
       final mst = PrimMst().compute(buildTinyGraph());
       expect(mst.edges.length, 4);
       expect(mst.totalWeight, 130.0);
-    }, skip: 'V1 — à activer quand Prim sera implémenté');
+    });
   });
 }

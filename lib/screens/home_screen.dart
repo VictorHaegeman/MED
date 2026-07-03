@@ -418,6 +418,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _modeChips() {
     const labels = {
       TransportMode.metro: '🚇 Métro',
+      TransportMode.train: '🚆 RER',
       TransportMode.tram: '🚊 Tram',
       TransportMode.bus: '🚌 Bus',
       TransportMode.walk: '🚶 Marche',
@@ -481,9 +482,10 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          const Text(
-            '1 842 nœuds · métro + tram + bus + marche · graphe vérifié au lancement',
-            style: TextStyle(fontSize: 11, color: MedColors.secondary),
+          Text(
+            '${appGraph.nodeCount} nœuds · ${appGraph.edgeCount} arêtes · '
+            'métro + RER + tram + bus + marche',
+            style: const TextStyle(fontSize: 11, color: MedColors.secondary),
           ),
         ],
       ),

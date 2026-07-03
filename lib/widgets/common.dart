@@ -30,8 +30,11 @@ class LineBadge extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: color,
-        borderRadius:
-            BorderRadius.circular(isRound ? 99 : (mode == TransportMode.tram ? 6 : 4)),
+        borderRadius: BorderRadius.circular(isRound
+            ? 99
+            : (mode == TransportMode.tram || mode == TransportMode.train
+                ? 6
+                : 4)),
       ),
       child: Text(
         label,
