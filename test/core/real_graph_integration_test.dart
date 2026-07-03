@@ -20,6 +20,10 @@ void main() {
   late TransportGraph g;
   late RouterService router;
 
+  // Heure de référence FIXE (mardi 10h) : tests déterministes quelle que
+  // soit l'heure d'exécution (la nuit, seuls les Noctilien circulent).
+  final tuesday10h = DateTime(2026, 7, 7, 10, 0);
+
   setUpAll(() {
     final json =
         File('assets/graph/idfm_graph.json').readAsStringSync();
@@ -76,7 +80,7 @@ void main() {
     final sw = Stopwatch()..start();
     final list = await router.findItineraries(
         const SearchResult.station('Châtelet'),
-        const SearchResult.station('Nation'));
+        const SearchResult.station('Nation'), when: tuesday10h);
     sw.stop();
 
     expect(list, isNotEmpty);
@@ -101,7 +105,7 @@ void main() {
     final sw = Stopwatch()..start();
     final list = await router.findItineraries(
         const SearchResult.station('Mairie'),
-        const SearchResult.station('Châtelet'));
+        const SearchResult.station('Châtelet'), when: tuesday10h);
     sw.stop();
 
     // Avant : des milliers de runs A* (paires) + choix d'une « Mairie »
@@ -120,7 +124,7 @@ void main() {
     final list = await router.findItineraries(
         const SearchResult.station('Châtelet'),
         const SearchResult.station('Nation'),
-        modeFilter: TransportMode.bus);
+        modeFilter: TransportMode.bus, when: tuesday10h);
 
     expect(list, isNotEmpty);
     for (final it in list) {
@@ -137,7 +141,7 @@ void main() {
     final list = await router.findItineraries(
         const SearchResult.station('La Défense'),
         const SearchResult.station('Nation'),
-        modeFilter: TransportMode.metro);
+        modeFilter: TransportMode.metro, when: tuesday10h);
 
     expect(list, isNotEmpty);
     for (final it in list) {
@@ -157,7 +161,7 @@ void main() {
     // Adresse en plein Paris (rue de Rivoli, ~300 m de Châtelet).
     final list = await router.findItineraries(
         const SearchResult.address('80 Rue de Rivoli, Paris', 48.8590, 2.3470),
-        const SearchResult.station('Nation'));
+        const SearchResult.station('Nation'), when: tuesday10h);
 
     expect(list, isNotEmpty);
     // Cohérence : pas plus lent que 1 h pour ~6 km en plein Paris.
@@ -181,7 +185,7 @@ void main() {
       if (from == to) continue;
       final sw = Stopwatch()..start();
       await router.findItineraries(
-          SearchResult.station(from), SearchResult.station(to));
+          SearchResult.station(from), SearchResult.station(to), when: tuesday10h);
       sw.stop();
       timed.add((sw.elapsedMilliseconds, '$from → $to'));
     }

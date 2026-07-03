@@ -61,6 +61,32 @@ void main() {
   final transfers = readTxt('$gtfsDir/transfers.txt');
   final routes = readTxt('$gtfsDir/routes.txt');
 
+  // Accessibilité fauteuil (extrait du GTFS officiel complet — le stops.txt
+  // du dépôt est réduit et ne porte pas wheelchair_boarding).
+  // Format : stop_id,wheelchair_boarding (1=accessible, 2=non).
+  final wheelchairByStopId = <String, int>{};
+  final accFile = File('$gtfsDir/accessibility.txt');
+  if (accFile.existsSync()) {
+    for (final row in readTxt('$gtfsDir/accessibility.txt')) {
+      final w = int.tryParse(row['wheelchair_boarding'] ?? '');
+      if (w != null) wheelchairByStopId[row['stop_id']!] = w;
+    }
+    stdout.writeln('accessibilité: ${wheelchairByStopId.length} quais renseignés');
+  } else {
+    stdout.writeln('AVERTISSEMENT: accessibility.txt absent — wheelchair=0 partout');
+  }
+
+  // Fusion par nœud (station, ligne) : 1 (accessible) prime sur 2 (non),
+  // qui prime sur 0 (inconnu) — un pôle est accessible si AU MOINS un de
+  // ses quais desservant la ligne l'est.
+  int mergeWheelchair(int current, int incoming) {
+    if (current == 1 || incoming == 1) return 1;
+    if (current == 2 || incoming == 2) return 2;
+    return 0;
+  }
+
+  final wheelchairByNodeId = <String, int>{};
+
   stdout.writeln(
     'stops=${stops.length} trips=${trips.length} '
     'stop_time=${stopTimes.length} transfers=${transfers.length}');
@@ -104,6 +130,12 @@ void main() {
 
       final stationKey = stationKeyOf(stop);
       final nodeId = '$stationKey#$routeId';
+
+      // Accessibilité du quai ENFANT (les valeurs 1/2 sont portées par les
+      // quais, pas par la station parente) — fusionnée par nœud.
+      final w = wheelchairByStopId[st['stop_id']] ?? 0;
+      wheelchairByNodeId[nodeId] =
+          mergeWheelchair(wheelchairByNodeId[nodeId] ?? 0, w);
 
       graph.addNode(GraphNode(
         id: nodeId,
@@ -212,6 +244,7 @@ void main() {
               'lineColor': n.lineColor,
               'lineShortName': n.lineShortName,
               'routeType': n.routeType,
+              'wheelchair': wheelchairByNodeId[n.id] ?? 0,
             })
         .toList(),
     'edges': [

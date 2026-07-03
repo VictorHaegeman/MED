@@ -60,6 +60,8 @@ class Itinerary {
     this.fromLon,
     this.toLat,
     this.toLon,
+    this.departAt,
+    this.arriveAt,
   });
 
   final String tag;
@@ -90,6 +92,11 @@ class Itinerary {
   final double? toLat;
   final double? toLon;
 
+  /// Horaires calculés à partir de l'option choisie (« partir à » /
+  /// « arriver à ») : departAt = quand partir, arriveAt = arrivée estimée.
+  final DateTime? departAt;
+  final DateTime? arriveAt;
+
   /// Copie avec surbrillance ajustée — utilisé après le tri par durée pour
   /// ne mettre en avant que l'itinéraire le plus rapide.
   Itinerary copyWith({bool? highlighted}) => Itinerary(
@@ -110,5 +117,7 @@ class Itinerary {
         fromLon: fromLon,
         toLat: toLat,
         toLon: toLon,
+        departAt: departAt,
+        arriveAt: arriveAt,
       );
 }

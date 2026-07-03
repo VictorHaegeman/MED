@@ -56,11 +56,15 @@ void main() {
     }
   }
 
+  // Heure de référence FIXE (mardi 10h) : les tests sont déterministes
+  // quelle que soit l'heure d'exécution (la nuit, le métro est fermé).
+  final tuesday10h = DateTime(2026, 7, 7, 10, 0);
+
   Future<Itinerary> best(String from, String to,
       {TransportMode? mode}) async {
     final list = await router.findItineraries(
         SearchResult.station(from), SearchResult.station(to),
-        modeFilter: mode);
+        modeFilter: mode, when: tuesday10h);
     expect(list, isNotEmpty, reason: 'aucun itinéraire $from → $to');
     // ignore: avoid_print
     print('$from → $to :');

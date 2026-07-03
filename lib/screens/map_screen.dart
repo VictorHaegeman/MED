@@ -21,6 +21,7 @@ class MapScreen extends StatelessWidget {
     this.fromLon,
     this.toLat,
     this.toLon,
+    this.departAt,
   });
 
   final List<String>? pathNodeIds;
@@ -31,6 +32,9 @@ class MapScreen extends StatelessWidget {
   final double? fromLon;
   final double? toLat;
   final double? toLon;
+
+  /// Heure de départ affichée (null = maintenant).
+  final DateTime? departAt;
 
   @override
   Widget build(BuildContext context) {
@@ -45,6 +49,7 @@ class MapScreen extends StatelessWidget {
         fromLon: fromLon,
         toLat: toLat,
         toLon: toLon,
+        departAt: departAt,
       );
     }
     return ValueListenableBuilder<List<String>?>(
@@ -82,6 +87,7 @@ class _MapView extends StatefulWidget {
     this.fromLon,
     this.toLat,
     this.toLon,
+    this.departAt,
   });
 
   final List<String>? pathNodeIds;
@@ -93,6 +99,7 @@ class _MapView extends StatefulWidget {
   final double? fromLon;
   final double? toLat;
   final double? toLon;
+  final DateTime? departAt;
 
   @override
   State<_MapView> createState() => _MapViewState();
@@ -295,9 +302,9 @@ class _MapViewState extends State<_MapView> {
   String _fmt(DateTime t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
-  String get _departureTime => _fmt(DateTime.now());
-  String get _arrivalTime =>
-      _fmt(DateTime.now().add(Duration(seconds: widget.totalSeconds.round())));
+  String get _departureTime => _fmt(widget.departAt ?? DateTime.now());
+  String get _arrivalTime => _fmt((widget.departAt ?? DateTime.now())
+      .add(Duration(seconds: widget.totalSeconds.round())));
   String get _nextDeparture {
     final now = DateTime.now();
     return _fmt(now.add(Duration(minutes: 1, seconds: 60 - now.second)));

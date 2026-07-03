@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/graph.dart';
 import 'core/graph_store.dart';
@@ -38,6 +39,14 @@ class MedApp extends StatelessWidget {
       title: 'MED — Itinéraires Paris',
       debugShowCheckedModeBanner: false,
       theme: buildMedTheme(),
+      // Pickers de date/heure en français.
+      locale: const Locale('fr', 'FR'),
+      supportedLocales: const [Locale('fr', 'FR')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: const MainShell(),
     );
   }

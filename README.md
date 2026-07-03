@@ -58,7 +58,17 @@ contre Dijkstra (même coût optimal) dans les tests.
   maintenant » **sans modèle horaire complet** : l'attente moyenne remplace la
   consultation des horaires. Monter dans un véhicule coûte l'attente ; rester
   à bord, non (état « à bord » dans la recherche).
-- **Noctilien exclu** des trajets (pas de modèle horaire → pas de bus de nuit).
+- **Jour / nuit** : le réseau ferré est considéré fermé de 1h00 à 5h30 —
+  pendant cette fenêtre, seuls les bus **Noctilien** sont proposés (attente
+  ~15 min). En journée, les Noctilien sont exclus.
+- **Horaires** : « partir à » (défaut : maintenant) ou « **arriver à** » — dans
+  ce cas l'heure de départ est calculée (arrivée − durée) et affichée.
+- **Accessibilité fauteuil (♿)** : embarquements, débarquements et
+  correspondances uniquement via des arrêts `wheelchair_boarding = 1`
+  (données du GTFS officiel complet, jointes par quai×ligne via
+  `assets/data/accessibility.txt`) ; on peut traverser une station
+  inaccessible en restant à bord. Réalité des données : métro accessible
+  ≈ ligne 14 seulement, tram ~98 %, bus ~60 %.
 - **Arrêts homonymes** (« Mairie » = 1 118 nœuds sur 433 sites) : résolution
   par pôle géographique (clustering 800 m, priorité aux pôles ferrés).
 - **Adresses** : rabattement à pied multi-arrêts (rayon 800 m, 4,9 km/h,

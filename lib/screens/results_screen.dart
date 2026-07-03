@@ -10,10 +10,24 @@ import '../widgets/common.dart';
 import 'detail_screen.dart';
 
 class ResultsScreen extends StatefulWidget {
-  const ResultsScreen({super.key, required this.from, required this.to});
+  const ResultsScreen({
+    super.key,
+    required this.from,
+    required this.to,
+    this.accessible = false,
+    this.when,
+    this.arriveBy = false,
+  });
 
   final SearchResult from;
   final SearchResult to;
+
+  /// Itinéraires accessibles en fauteuil roulant uniquement.
+  final bool accessible;
+
+  /// Horaire choisi (null = maintenant). [arriveBy] : heure d'arrivée visée.
+  final DateTime? when;
+  final bool arriveBy;
 
   @override
   State<ResultsScreen> createState() => _ResultsScreenState();
@@ -30,10 +44,24 @@ class _ResultsScreenState extends State<ResultsScreen> {
 
   TransportMode? _filter; // null = Tous
 
+  // Accessibilité fauteuil — modifiable depuis l'écran de résultats
+  // (initialisée depuis l'option choisie à l'accueil).
+  late bool _accessible = widget.accessible;
+
+  Future<List<Itinerary>> _query({TransportMode? mode}) =>
+      _router.findItineraries(
+        widget.from,
+        widget.to,
+        modeFilter: mode,
+        accessible: _accessible,
+        when: widget.when,
+        arriveBy: widget.arriveBy,
+      );
+
   @override
   void initState() {
     super.initState();
-    _baseItineraries = _router.findItineraries(widget.from, widget.to);
+    _baseItineraries = _query();
     _baseItineraries.then(_publishFirst);
   }
 
@@ -53,9 +81,25 @@ class _ResultsScreenState extends State<ResultsScreen> {
         _filteredItineraries = null; // revient aux résultats de base
         _baseItineraries.then(_publishFirst); // resynchronise la carte
       } else {
-        _filteredItineraries = _router
-            .findItineraries(widget.from, widget.to, modeFilter: mode)
-            .then((list) {
+        _filteredItineraries = _query(mode: mode).then((list) {
+          _publishFirst(list);
+          return list;
+        });
+      }
+    });
+  }
+
+  /// Bascule le mode accessible : recalcule les résultats courants
+  /// (le tri par durée donne le chemin accessible le plus court en tête).
+  void _toggleAccessible() {
+    setState(() {
+      _accessible = !_accessible;
+      _baseItineraries = _query();
+      if (_filter == null) {
+        _filteredItineraries = null;
+        _baseItineraries.then(_publishFirst);
+      } else {
+        _filteredItineraries = _query(mode: _filter).then((list) {
           _publishFirst(list);
           return list;
         });
@@ -90,8 +134,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
                               fontSize: 15, fontWeight: FontWeight.w700),
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const Text('Aujourd\'hui · départ maintenant',
-                            style: TextStyle(
+                        Text(_subtitle,
+                            style: const TextStyle(
                                 fontSize: 12, color: MedColors.secondary)),
                       ],
                     ),
@@ -103,7 +147,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
               const SizedBox(height: 12),
               Expanded(
                 child: FutureBuilder<List<Itinerary>>(
-                  key: ValueKey(_filter), // force rebuild quand le filtre change
+                  // force rebuild quand le filtre ou l'accessibilité change
+                  key: ValueKey('$_filter-$_accessible'),
                   future: _currentFuture,
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) {
@@ -138,6 +183,32 @@ class _ResultsScreenState extends State<ResultsScreen> {
     );
   }
 
+  static const _weekdaysFr = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+  static const _monthsFr = [
+    'janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin',
+    'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'
+  ];
+
+  String get _subtitle {
+    final parts = <String>[];
+    final w = widget.when;
+    if (w == null) {
+      parts.add('Aujourd\'hui · départ maintenant');
+    } else {
+      final now = DateTime.now();
+      final sameDay =
+          w.year == now.year && w.month == now.month && w.day == now.day;
+      final day = sameDay
+          ? 'Aujourd\'hui'
+          : '${_weekdaysFr[w.weekday - 1]} ${w.day} ${_monthsFr[w.month - 1]}';
+      final hm =
+          '${w.hour.toString().padLeft(2, '0')}:${w.minute.toString().padLeft(2, '0')}';
+      parts.add('$day · ${widget.arriveBy ? 'arriver à' : 'partir à'} $hm');
+    }
+    if (_accessible) parts.add('♿ accessible');
+    return parts.join(' · ');
+  }
+
   Widget _filterChips() {
     final filters = <(TransportMode?, String)>[
       (null, 'Tous'),
@@ -155,9 +226,19 @@ class _ResultsScreenState extends State<ResultsScreen> {
             selected: _filter == mode,
             onTap: () => _setFilter(mode),
           ),
+        // Interrupteur combinable avec le filtre de mode : « accessible +
+        // bus » = trajets bus accessibles uniquement.
+        MedChip(
+          label: '♿ Accessible',
+          selected: _accessible,
+          onTap: _toggleAccessible,
+        ),
       ],
     );
   }
+
+  String _hm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   Widget _emptyState() {
     final modeName = switch (_filter) {
@@ -166,6 +247,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
       TransportMode.bus => 'bus',
       _ => 'ce mode',
     };
+    final msg = _accessible
+        ? 'Aucun itinéraire accessible en fauteuil${_filter != null ? ' en $modeName' : ''}\nentre ces deux points.'
+        : 'Aucun itinéraire en $modeName\nentre ces deux points.';
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -173,7 +257,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
           const Text('😕', style: TextStyle(fontSize: 40)),
           const SizedBox(height: 12),
           Text(
-            'Aucun itinéraire en $modeName\nentre ces deux points.',
+            msg,
             textAlign: TextAlign.center,
             style: const TextStyle(
                 fontSize: 14,
@@ -237,17 +321,28 @@ class _ResultsScreenState extends State<ResultsScreen> {
           const SizedBox(height: 9),
           Row(
             children: [
+              if (it.departAt != null && it.arriveAt != null) ...[
+                Text('🕐 ${_hm(it.departAt!)} → ${_hm(it.arriveAt!)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: MedColors.text)),
+                const SizedBox(width: 14),
+              ],
               Text('🚶 ${it.walkLabel}',
                   style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                       color: MedColors.secondary)),
               const SizedBox(width: 14),
-              Text('🌱 ${it.co2Label}',
-                  style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: MedColors.green)),
+              Flexible(
+                child: Text('🌱 ${it.co2Label}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: MedColors.green),
+                    overflow: TextOverflow.ellipsis),
+              ),
             ],
           ),
         ],

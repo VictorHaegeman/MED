@@ -25,6 +25,7 @@ class GraphNode {
     this.lineShortName,
     this.routeType, //0=tram, 1=métro, 2=train, 3=bus
     this.headsign,
+    this.wheelchair,
   });
 
   final String id; // ex: "IDFM:71673#IDFM:C01379"
@@ -36,6 +37,13 @@ class GraphNode {
   final String? lineShortName;
   final int? routeType;
   final String? headsign;
+
+  /// Accessibilité fauteuil roulant (GTFS `wheelchair_boarding`) :
+  /// 1 = accessible, 2 = non accessible, 0/null = inconnu.
+  final int? wheelchair;
+
+  /// True si l'arrêt est déclaré accessible en fauteuil dans le GTFS.
+  bool get isWheelchairAccessible => wheelchair == 1;
 }
 
 /// Arête orientée pondérée.
@@ -117,6 +125,7 @@ class TransportGraph {
         lineColor: m['lineColor'] as String?,
         lineShortName: m['lineShortName'] as String?,
         routeType: m['routeType'] as int?,
+        wheelchair: m['wheelchair'] as int?,
       ));
     }
 
@@ -125,17 +134,9 @@ class TransportGraph {
     // Élaguer allège aussi fortement le graphe (~493 000 arêtes transfer).
     const maxTransferSecs = 360.0; // 6 min de marche
 
-    // Lignes Noctilien (bus de nuit) : identifiées par lineShortName "N…" sur
-    // du bus (routeType 3). L'app fonctionne en « départ maintenant » sans
-    // modèle horaire → on ne doit pas proposer de rouler en bus de nuit.
-    bool isNoctilien(String? nodeId) {
-      final n = nodeId != null ? graph.nodes[nodeId] : null;
-      final name = n?.lineShortName;
-      return n?.routeType == 3 &&
-          name != null &&
-          name.isNotEmpty &&
-          (name[0] == 'N' || name[0] == 'n');
-    }
+    // NB : les lignes Noctilien (bus de nuit) sont CONSERVÉES dans le graphe.
+    // Le routeur les autorise ou non à la requête selon l'heure choisie
+    // (jour : exclues ; nuit 1h-5h30 : seules autorisées, le métro est fermé).
 
     // Garde le meilleur arc par triple (from, to, type) — filet de sécurité
     // contre les doublons résiduels dans le JSON.
@@ -157,9 +158,6 @@ class TransportGraph {
         // et garantit l'admissibilité de l'heuristique A*.
         final minW = distM / maxSpeedMs;
         if (w < minW) w = minW;
-        // Interdit de ROULER en bus de nuit (les correspondances vers ces
-        // arrêts restent autorisées, mais pas les trajets ride Noctilien).
-        if (isNoctilien(from)) continue;
       } else {
         // Plancher de vitesse de marche : neutralise les « téléportations »
         // (min_transfer_time GTFS incohérent avec la distance physique).

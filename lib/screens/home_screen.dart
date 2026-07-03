@@ -51,6 +51,11 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<TransportMode> _enabledModes = {...TransportMode.values};
   bool _locating = false;
 
+  // Options de recherche : accessibilité fauteuil + horaire choisi.
+  bool _accessible = false;
+  DateTime? _when; // null = maintenant
+  bool _arriveBy = false; // true = « arriver à », false = « partir à »
+
   // Suggestions pour chaque champ (stations + adresses mélangées)
   List<SearchResult> _fromSuggestions = [];
   List<SearchResult> _toSuggestions = [];
@@ -226,8 +231,150 @@ class _HomeScreenState extends State<HomeScreen> {
       _fromSuggestions = [];
       _toSuggestions = [];
     });
-    Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ResultsScreen(from: from, to: to)));
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => ResultsScreen(
+              from: from,
+              to: to,
+              accessible: _accessible,
+              when: _when,
+              arriveBy: _arriveBy,
+            )));
+  }
+
+  // -------------------------------------------------------------------------
+  // Choix de l'horaire (« partir à » / « arriver à »)
+  // -------------------------------------------------------------------------
+
+  static const _weekdaysFr = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+  static const _monthsFr = [
+    'janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin',
+    'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'
+  ];
+
+  String get _scheduleLabel {
+    if (_when == null) return '🕐 Maintenant';
+    final t = _when!;
+    final now = DateTime.now();
+    final sameDay = t.year == now.year && t.month == now.month && t.day == now.day;
+    final day = sameDay
+        ? ''
+        : '${_weekdaysFr[t.weekday - 1]} ${t.day} ${_monthsFr[t.month - 1]} · ';
+    final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    return '🕐 ${_arriveBy ? 'Arriver à' : 'Partir à'} $day$hm';
+  }
+
+  Future<void> _pickSchedule() async {
+    var arriveBy = _arriveBy;
+    var when = _when ?? DateTime.now();
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: MedColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final hm =
+              '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}';
+          final dateLabel =
+              '${_weekdaysFr[when.weekday - 1]} ${when.day} ${_monthsFr[when.month - 1]}';
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Quand ?',
+                    style:
+                        TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 14),
+                Row(children: [
+                  MedChip(
+                    label: 'Partir à',
+                    selected: !arriveBy,
+                    onTap: () => setSheet(() => arriveBy = false),
+                  ),
+                  const SizedBox(width: 8),
+                  MedChip(
+                    label: 'Arriver à',
+                    selected: arriveBy,
+                    onTap: () => setSheet(() => arriveBy = true),
+                  ),
+                ]),
+                const SizedBox(height: 14),
+                Row(children: [
+                  Expanded(
+                    child: MedChip(
+                      label: '📅 $dateLabel',
+                      onTap: () async {
+                        final d = await showDatePicker(
+                          context: ctx,
+                          initialDate: when,
+                          firstDate: DateTime.now()
+                              .subtract(const Duration(days: 1)),
+                          lastDate:
+                              DateTime.now().add(const Duration(days: 60)),
+                        );
+                        if (d != null) {
+                          setSheet(() => when = DateTime(
+                              d.year, d.month, d.day, when.hour, when.minute));
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: MedChip(
+                      label: '🕐 $hm',
+                      onTap: () async {
+                        final t = await showTimePicker(
+                          context: ctx,
+                          initialTime: TimeOfDay.fromDateTime(when),
+                        );
+                        if (t != null) {
+                          setSheet(() => when = DateTime(when.year, when.month,
+                              when.day, t.hour, t.minute));
+                        }
+                      },
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 18),
+                Row(children: [
+                  Expanded(
+                    child: MedChip(
+                      label: 'Maintenant',
+                      onTap: () {
+                        _when = null;
+                        _arriveBy = false;
+                        Navigator.of(sheetCtx).pop(false);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: PrimaryButton(
+                      label: 'Valider',
+                      onTap: () => Navigator.of(sheetCtx).pop(true),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    if (confirmed == true) {
+      setState(() {
+        _when = when;
+        _arriveBy = arriveBy;
+      });
+    } else {
+      setState(() {}); // « Maintenant » a pu réinitialiser
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -245,6 +392,8 @@ class _HomeScreenState extends State<HomeScreen> {
               _header(),
               const SizedBox(height: 20),
               _searchCard(),
+              const SizedBox(height: 12),
+              _optionsRow(),
               const SizedBox(height: 20),
               _sectionTitle('Modes activés'),
               const SizedBox(height: 8),
@@ -410,6 +559,26 @@ class _HomeScreenState extends State<HomeScreen> {
             border: InputBorder.none,
             contentPadding: EdgeInsets.zero,
           ),
+        ),
+      ],
+    );
+  }
+
+  /// Options de recherche : accessibilité fauteuil + choix de l'horaire.
+  Widget _optionsRow() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        MedChip(
+          label: '♿ Accessible',
+          selected: _accessible,
+          onTap: () => setState(() => _accessible = !_accessible),
+        ),
+        MedChip(
+          label: _scheduleLabel,
+          selected: _when != null,
+          onTap: _pickSchedule,
         ),
       ],
     );

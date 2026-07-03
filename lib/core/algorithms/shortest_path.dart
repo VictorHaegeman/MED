@@ -414,6 +414,12 @@ const Map<int, double> kBoardingWaitSecs = {
   2: 240, // RER/Transilien — passage ~8 min
   3: 360, // bus — passage ~12 min
 };
+
+/// Attentes de NUIT (1h-5h30) : seuls les Noctilien circulent,
+/// passage ~30-60 min → demi-intervalle 15 min.
+const Map<int, double> kNightBoardingWaitSecs = {
+  0: 900, 1: 900, 2: 900, 3: 900,
+};
 const double kDefaultBoardingWaitSecs = 240;
 
 class TransitRouter {
@@ -431,6 +437,7 @@ class TransitRouter {
     Set<String>? penalizedEdges,
     double edgePenaltySecs = 0,
     bool boardingWaits = true,
+    Map<int, double> boardingWaitBy = kBoardingWaitSecs,
     double maxCostSecs = double.infinity,
   }) {
     final stopwatch = Stopwatch()..start();
@@ -530,7 +537,7 @@ class TransitRouter {
           vOnboard = true;
           // Embarquement : on n'était pas à bord → attente du véhicule.
           if (boardingWaits && !uOnboard) {
-            w += kBoardingWaitSecs[graph.nodes[u]?.routeType] ??
+            w += boardingWaitBy[graph.nodes[u]?.routeType] ??
                 kDefaultBoardingWaitSecs;
           }
         } else {
