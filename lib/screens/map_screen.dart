@@ -120,6 +120,7 @@ class _MapViewState extends State<_MapView> {
       distanceKm: co2.distanceKm,
       durationSeconds: widget.totalSeconds,
       co2SavedKg: co2.savedKg,
+      pathNodeIds: widget.pathNodeIds ?? const [],
     ));
     tripSavedNotifier.value++;
     if (!mounted) return;

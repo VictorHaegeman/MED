@@ -9,6 +9,7 @@ class SavedTrip {
     required this.distanceKm,
     required this.durationSeconds,
     required this.co2SavedKg,
+    this.pathNodeIds = const [],
   });
 
   final String id;
@@ -19,6 +20,11 @@ class SavedTrip {
   final double durationSeconds;
   final double co2SavedKg;
 
+  /// Tracé du trajet (IDs de nœuds du graphe) — permet de revoir le trajet
+  /// sur la carte depuis l'historique. Vide pour les trajets enregistrés
+  /// avant l'ajout de ce champ.
+  final List<String> pathNodeIds;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'date': date.toIso8601String(),
@@ -27,6 +33,7 @@ class SavedTrip {
         'distanceKm': distanceKm,
         'durationSeconds': durationSeconds,
         'co2SavedKg': co2SavedKg,
+        'pathNodeIds': pathNodeIds,
       };
 
   factory SavedTrip.fromJson(Map<String, dynamic> j) => SavedTrip(
@@ -37,6 +44,10 @@ class SavedTrip {
         distanceKm: (j['distanceKm'] as num).toDouble(),
         durationSeconds: (j['durationSeconds'] as num).toDouble(),
         co2SavedKg: (j['co2SavedKg'] as num).toDouble(),
+        pathNodeIds: (j['pathNodeIds'] as List<dynamic>?)
+                ?.cast<String>()
+                .toList() ??
+            const [],
       );
 
   static List<SavedTrip> decodeList(String json) {

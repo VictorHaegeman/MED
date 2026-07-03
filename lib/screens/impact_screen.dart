@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../core/algorithms/shortest_path.dart';
 import '../main.dart' show appGraph, tripSavedNotifier;
 import '../models/saved_trip.dart';
 import '../services/co2_service.dart';
 import '../services/trip_storage.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'map_screen.dart';
 import 'network_tree_screen.dart';
 
 class ImpactScreen extends StatefulWidget {
@@ -276,7 +278,41 @@ class _ImpactScreenState extends State<ImpactScreen> {
     );
   }
 
+  // Benchmark RÉEL Dijkstra vs A* — mesuré sur ce navigateur, une seule fois
+  // (mise en cache), sur une paire représentative du graphe chargé.
+  static Future<_BenchResult>? _benchFuture;
+
+  static Future<_BenchResult> _runBenchmark() async {
+    // Laisse la frame courante se peindre avant le calcul.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final g = appGraph;
+    String? idOf(String name) {
+      for (final n in g.nodes.values) {
+        if (n.routeType == 1 && n.stationName == name) return n.id;
+      }
+      return null;
+    }
+
+    var fromId = idOf('Châtelet');
+    var toId = idOf('Nation');
+    if (fromId == null || toId == null) {
+      // Graphe sans ces stations : première/dernière entrée en repli.
+      fromId = g.nodes.keys.first;
+      toId = g.nodes.keys.last;
+    }
+    final d = Dijkstra().run(g, fromId, toId);
+    final a = AStar().run(g, fromId, toId);
+    return _BenchResult(
+      dijkstraMs: d.computeTime.inMicroseconds / 1000,
+      dijkstraExplored: d.exploredNodes,
+      aStarMs: a.computeTime.inMicroseconds / 1000,
+      aStarExplored: a.exploredNodes,
+    );
+  }
+
   Widget _benchmarkCard() {
+    _benchFuture ??= _runBenchmark();
+
     Widget bench(String name, String value, double ratio, Color color) =>
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -306,20 +342,46 @@ class _ImpactScreenState extends State<ImpactScreen> {
         );
 
     return MedCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Performance des algorithmes',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 12),
-          bench('Dijkstra (tas binaire)', '14 ms', 0.78, MedColors.accent),
-          const SizedBox(height: 10),
-          bench('A* (heuristique géodésique)', '8 ms', 0.45, MedColors.green),
-          const SizedBox(height: 10),
-          const Text(
-              'Moyenne sur 1 000 requêtes · pic mémoire 6,2 Mo · ~0,4 W',
-              style: TextStyle(fontSize: 11, color: MedColors.secondary)),
-        ],
+      child: FutureBuilder<_BenchResult>(
+        future: _benchFuture,
+        builder: (context, snap) {
+          final b = snap.data;
+          final maxExplored = b == null
+              ? 1
+              : (b.dijkstraExplored > b.aStarExplored
+                  ? b.dijkstraExplored
+                  : b.aStarExplored);
+          String fmt(double ms) =>
+              ms >= 10 ? '${ms.round()} ms' : '${ms.toStringAsFixed(1)} ms';
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Performance des algorithmes',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              bench(
+                  'Dijkstra (tas binaire)',
+                  b == null ? '…' : fmt(b.dijkstraMs),
+                  b == null ? 0 : b.dijkstraExplored / maxExplored,
+                  MedColors.accent),
+              const SizedBox(height: 10),
+              bench(
+                  'A* (heuristique géodésique)',
+                  b == null ? '…' : fmt(b.aStarMs),
+                  b == null ? 0 : b.aStarExplored / maxExplored,
+                  MedColors.green),
+              const SizedBox(height: 10),
+              Text(
+                b == null
+                    ? 'Mesure en cours sur ce navigateur…'
+                    : 'Mesuré ici même · Châtelet → Nation · '
+                        '${b.dijkstraExplored} vs ${b.aStarExplored} nœuds explorés',
+                style:
+                    const TextStyle(fontSize: 11, color: MedColors.secondary),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -332,29 +394,57 @@ class _ImpactScreenState extends State<ImpactScreen> {
         children: [
           const Text('Derniers trajets enregistrés',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          const Text('Touchez un trajet pour le revoir sur la carte',
+              style: TextStyle(fontSize: 11, color: MedColors.secondary)),
           const SizedBox(height: 10),
           for (final t in recent) ...[
-            Row(
-              children: [
-                const Icon(Icons.directions_transit_filled_rounded,
-                    size: 14, color: MedColors.accent),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '${t.from} → ${t.to}',
-                    style: const TextStyle(fontSize: 12),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+            InkWell(
+              // Les trajets enregistrés avant l'ajout du tracé n'ont pas de
+              // pathNodeIds : pas de carte à montrer pour eux.
+              onTap: t.pathNodeIds.isEmpty
+                  ? null
+                  : () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => MapScreen(
+                            pathNodeIds: t.pathNodeIds,
+                            totalSeconds: t.durationSeconds,
+                            from: t.from,
+                            to: t.to,
+                          ),
+                        ),
+                      ),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    const Icon(Icons.directions_transit_filled_rounded,
+                        size: 14, color: MedColors.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${t.from} → ${t.to}',
+                        style: const TextStyle(fontSize: 12),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '−${t.co2SavedKg.toStringAsFixed(2)} kg',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: MedColors.green),
+                    ),
+                    if (t.pathNodeIds.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      const Icon(Icons.chevron_right_rounded,
+                          size: 16, color: MedColors.secondary),
+                    ],
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  '−${t.co2SavedKg.toStringAsFixed(2)} kg',
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: MedColors.green),
-                ),
-              ],
+              ),
             ),
             if (t != recent.last)
               Divider(
@@ -398,6 +488,19 @@ class _Co2Ring extends StatelessWidget {
       ),
     );
   }
+}
+
+class _BenchResult {
+  const _BenchResult({
+    required this.dijkstraMs,
+    required this.dijkstraExplored,
+    required this.aStarMs,
+    required this.aStarExplored,
+  });
+  final double dijkstraMs;
+  final int dijkstraExplored;
+  final double aStarMs;
+  final int aStarExplored;
 }
 
 class _Comparison {

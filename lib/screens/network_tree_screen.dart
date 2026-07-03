@@ -49,7 +49,12 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
   @override
   void initState() {
     super.initState();
-    _graph = widget.graph ?? buildDemoNetwork();
+    // Arborescence sur le RÉSEAU FERRÉ uniquement (métro/RER/tram) : les
+    // ~41 700 arrêts de bus rendraient l'arbre illisible et Prim coûteux.
+    // On se restreint aussi à la composante connexe principale : un arbre
+    // COUVRANT n'existe pas sur un graphe fragmenté (PrimMst lève sinon).
+    final source = widget.graph ?? buildDemoNetwork();
+    _graph = _largestComponent(_railSubgraph(source));
 
     final sw = Stopwatch()..start();
     _mst = PrimMst().compute(_graph);
@@ -57,6 +62,63 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
     _computeTime = sw.elapsed;
 
     _prepareRenderData();
+  }
+
+  /// Sous-graphe ferré : exclut les bus (routeType 3).
+  TransportGraph _railSubgraph(TransportGraph src) {
+    final g = TransportGraph();
+    for (final n in src.nodes.values) {
+      if (n.routeType == 3) continue;
+      g.addNode(n);
+    }
+    for (final id in g.nodes.keys) {
+      for (final e in src.neighbors(id)) {
+        if (g.nodes.containsKey(e.to)) g.addEdge(e);
+      }
+    }
+    return g;
+  }
+
+  /// Plus grande composante connexe (au sens NON orienté, celui de l'ACM).
+  TransportGraph _largestComponent(TransportGraph src) {
+    final und = <String, List<String>>{
+      for (final id in src.nodes.keys) id: []
+    };
+    for (final id in src.nodes.keys) {
+      for (final e in src.neighbors(id)) {
+        if (!und.containsKey(e.to)) continue;
+        und[e.from]!.add(e.to);
+        und[e.to]!.add(e.from);
+      }
+    }
+    final seen = <String>{};
+    var best = <String>{};
+    for (final start in src.nodes.keys) {
+      if (!seen.add(start)) continue;
+      final comp = <String>{start};
+      final stack = [start];
+      while (stack.isNotEmpty) {
+        final u = stack.removeLast();
+        for (final v in und[u]!) {
+          if (seen.add(v)) {
+            comp.add(v);
+            stack.add(v);
+          }
+        }
+      }
+      if (comp.length > best.length) best = comp;
+    }
+    if (best.length == src.nodeCount) return src;
+    final g = TransportGraph();
+    for (final id in best) {
+      g.addNode(src.nodes[id]!);
+    }
+    for (final id in best) {
+      for (final e in src.neighbors(id)) {
+        if (g.nodes.containsKey(e.to)) g.addEdge(e);
+      }
+    }
+    return g;
   }
 
   /// Transforme l'ACM (liste d'arêtes) en primitives dessinables.
@@ -216,7 +278,7 @@ class _NetworkTreeScreenState extends State<NetworkTreeScreen> {
                   Text('Arborescence du réseau',
                       style:
                           TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                  Text('Arbre couvrant minimal · Prim',
+                  Text('ACM Prim · réseau ferré (composante principale)',
                       style:
                           TextStyle(fontSize: 11, color: MedColors.secondary)),
                 ],
