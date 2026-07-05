@@ -4,10 +4,11 @@ Application d'optimisation des temps de trajet dans le réseau de transport
 francilien (métro, RER/Transilien, tram, bus, marche). Projet Solution
 Delivery 2025-2026, EFREI — Filière IT.
 
-**État actuel : V1** — cœur algorithmique implémenté à la main (Dijkstra, A*,
-BFS, Prim), graphe IDFM réel (~43 000 nœuds, ~478 600 arêtes après élagage),
-recherche multi-source/multi-cible, tests unitaires + tests d'intégration sur
-trajets réels, benchmark reproductible.
+**État actuel :** Choix de la version 3 pour permettre à l'utilisateur d'avoir 
+accès aux données récentes et aux horaires précis. Le projet a un cœur 
+algorithmique implémenté à la main (Dijkstra, A*, BFS, Prim), graphe IDFM réel 
+(~43 000 nœuds, ~478 600 arêtes après élagage), recherche multi-source/multi-cible, 
+tests unitaires + tests d'intégration sur trajets réels, benchmark reproductible.
 
 ## Prérequis
 
